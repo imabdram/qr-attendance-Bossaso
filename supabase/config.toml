@@ -1,0 +1,6 @@
+[functions.create-qr-token]
+verify_jwt = true
+[functions.scan-attendance]
+verify_jwt = true
+[functions.admin-create-employee]
+verify_jwt = true
