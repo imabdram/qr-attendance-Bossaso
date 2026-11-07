@@ -26,7 +26,7 @@ function Dashboard() {
   const [rows, setRows] = useState<Attendance[]>([]);
   const [staff, setStaff] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [lateAt, setLateAt] = useState('08:00');
+  const [lateAt, setLateAt] = useState('09:00');
 
   const load = async () => {
     setLoading(true);
@@ -616,7 +616,7 @@ function QrDisplay() {
 }
 
 function Reports() {
-  const [from, setFrom] = useState(todayLocal().slice(0, 8) + '01');
+  const [from, setFrom] = useState(todayLocal());
   const [to, setTo] = useState(todayLocal());
   const [rows, setRows] = useState<Attendance[]>([]);
   const [loading, setLoading] = useState(false);

@@ -41,7 +41,7 @@ create table if not exists public.app_settings (
 );
 
 insert into public.app_settings(setting_key, setting_value)
-values('late_after', '08:00')
+values('late_after', '09:00')
 on conflict(setting_key) do nothing;
 
 alter table public.profiles enable row level security;
@@ -193,7 +193,7 @@ begin
   where setting_key = 'late_after';
 
   if v_late_after is null then
-    v_late_after := '08:00';
+    v_late_after := '09:00';
   end if;
 
   v_local_time := to_char(timezone('Africa/Mogadishu', now()), 'HH24:MI');
