@@ -374,21 +374,19 @@ function Employees() {
   const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'afternoon'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
-  // Simplified form: Name, Username, Phone Number, Shift (default: morning), Password, Role
+  // Simplified form: Name, Username, Phone Number, Shift (default: morning), Password
   const [form, setForm] = useState<{
     full_name: string;
     phone: string;
     username: string;
     password: string;
     shift: 'morning' | 'afternoon';
-    role: 'employee' | 'admin';
   }>({
     full_name: '',
     phone: '',
     username: '',
     password: '',
     shift: 'morning',
-    role: 'employee',
   });
 
   // Modal States
@@ -408,6 +406,7 @@ function Employees() {
     const { data } = await supabase
       .from('profiles')
       .select('*')
+      .eq('role', 'employee')
       .order('full_name');
     setList((data || []) as Profile[]);
   };
@@ -427,17 +426,15 @@ function Employees() {
         username: form.username,
         password: form.password,
         shift: form.shift,
-        role: form.role,
       });
       setMsgType('success');
-      setMsg(data.message || (form.role === 'admin' ? 'Admin account created successfully.' : 'Employee account created successfully.'));
+      setMsg(data.message || 'Employee account created successfully.');
       setForm({
         full_name: '',
         phone: '',
         username: '',
         password: '',
         shift: 'morning',
-        role: 'employee',
       });
       setShow(false);
       await load();
@@ -535,12 +532,12 @@ function Employees() {
     <>
       <div className="page-head">
         <div>
-          <p className="eyebrow">USER DIRECTORY</p>
-          <h1>Accounts & Staff</h1>
-          <p className="muted">Manage employee and administrator profiles, shifts, and credentials.</p>
+          <p className="eyebrow">EMPLOYEES</p>
+          <h1>Employees</h1>
+          <p className="muted">Manage employee profiles, shifts, and attendance credentials.</p>
         </div>
         <button className="primary" onClick={() => setShow(!show)}>
-          <Plus size={17} /> Add Account
+          <Plus size={17} /> Add Employee
         </button>
       </div>
 
@@ -602,25 +599,6 @@ function Employees() {
           </label>
 
           <label>
-            Role
-            <select
-              value={form.role}
-              onChange={(e) => setForm({ ...form, role: e.target.value as any })}
-              style={{
-                border: '1px solid #dce5ee',
-                borderRadius: '8px',
-                padding: '11px 12px',
-                outline: 'none',
-                background: 'white',
-                color: '#193651',
-              }}
-            >
-              <option value="employee">Employee (Scan QR attendance)</option>
-              <option value="admin">Administrator (Full admin portal access)</option>
-            </select>
-          </label>
-
-          <label>
             Temporary password
             <input
               required
@@ -633,7 +611,7 @@ function Employees() {
 
           <div className="span-2" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
             <button className="primary" disabled={busy}>
-              {busy ? 'Creating…' : form.role === 'admin' ? 'Create Admin Account' : 'Create Employee Account'}
+              {busy ? 'Creating…' : 'Create Employee Account'}
             </button>
             <button type="button" className="secondary" onClick={() => setShow(false)}>
               Cancel
@@ -771,10 +749,10 @@ function Employees() {
         </div>
       )}
 
-      {/* Employee & Admin List Section */}
+      {/* Employee List Section */}
       <section className="panel">
         <div className="panel-head" style={{ flexWrap: 'wrap', gap: '12px' }}>
-          <h2>Accounts Directory ({filtered.length})</h2>
+          <h2>Employee Directory ({filtered.length})</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <div className="searchbox">
               <Search size={16} />
@@ -784,23 +762,6 @@ function Employees() {
                 onChange={(e) => setQ(e.target.value)}
               />
             </div>
-            <select
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value as any)}
-              style={{
-                border: '1px solid #e5ebf1',
-                borderRadius: '8px',
-                padding: '7px 10px',
-                fontSize: '12px',
-                background: '#f5f8fb',
-                color: '#476078',
-                fontWeight: 600,
-              }}
-            >
-              <option value="all">All Roles</option>
-              <option value="employee">Employees Only</option>
-              <option value="admin">Administrators Only</option>
-            </select>
             <select
               value={shiftFilter}
               onChange={(e) => setShiftFilter(e.target.value as any)}
@@ -842,7 +803,6 @@ function Employees() {
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Role</th>
                 <th>Phone Number</th>
                 <th>Username</th>
                 <th>Shift</th>
@@ -853,8 +813,8 @@ function Employees() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="empty">
-                    No accounts matching the filter criteria.
+                  <td colSpan={6} className="empty">
+                    No employees matching the filter criteria.
                   </td>
                 </tr>
               ) : (
@@ -864,24 +824,6 @@ function Employees() {
                     <tr key={p.id}>
                       <td>
                         <strong>{p.full_name}</strong>
-                      </td>
-                      <td>
-                        <span
-                          style={{
-                            display: 'inline-block',
-                            padding: '3px 8px',
-                            borderRadius: '6px',
-                            fontSize: '11px',
-                            fontWeight: 700,
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.04em',
-                            background: p.role === 'admin' ? '#fdf2f8' : '#eff6ff',
-                            color: p.role === 'admin' ? '#be185d' : '#1d4ed8',
-                            border: `1px solid ${p.role === 'admin' ? '#fbcfe8' : '#bfdbfe'}`,
-                          }}
-                        >
-                          {p.role}
-                        </span>
                       </td>
                       <td>{p.employee_code}</td>
                       <td>{p.username}</td>
@@ -928,15 +870,13 @@ function Employees() {
                           >
                             <KeyRound size={14} />
                           </button>
-                          {p.role !== 'admin' && (
-                            <button
-                              className="icon-action-btn delete"
-                              title="Delete Account"
-                              onClick={() => setDeleteEmp(p)}
-                            >
-                              <Trash2 size={14} />
-                            </button>
-                          )}
+                          <button
+                            className="icon-action-btn delete"
+                            title="Delete Account"
+                            onClick={() => setDeleteEmp(p)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
                         </div>
                       </td>
                     </tr>
