@@ -140,3 +140,26 @@
   padding: 20px;
   box-shadow: 0 3px 14px #102a4307;
 }
+
+/* Shift Badges */
+.shift-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: capitalize;
+}
+.shift-badge.morning {
+  background: #eff6ff;
+  color: #1d4ed8;
+  border: 1px solid #bfdbfe;
+}
+.shift-badge.afternoon {
+  background: #fff7ed;
+  color: #c2410c;
+  border: 1px solid #fed7aa;
+}
+

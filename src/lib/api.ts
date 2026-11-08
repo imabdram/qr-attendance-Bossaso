@@ -76,6 +76,7 @@ export async function createEmployeeAccount(form: {
   username: string;
   password: string;
   department?: string;
+  shift?: 'morning' | 'afternoon';
 }): Promise<{ success: boolean; message: string }> {
   try {
     const { data, error } = await supabase.functions.invoke('admin-create-employee', {
@@ -138,13 +139,14 @@ export async function adminResetPassword(
 
 export async function adminUpdateEmployee(
   employeeId: string,
-  form: { full_name: string; employee_code: string; department?: string }
+  form: { full_name: string; employee_code: string; department?: string; shift?: 'morning' | 'afternoon' }
 ): Promise<{ success: boolean; message: string }> {
   const { data, error } = await supabase.rpc('admin_update_employee', {
     p_employee_id: employeeId,
     p_full_name: form.full_name,
     p_employee_code: form.employee_code,
     p_department: form.department || null,
+    p_shift: form.shift || 'morning',
   });
   if (error) throw new Error(error.message);
   if (!data?.success) throw new Error(data?.message || 'Could not update employee.');

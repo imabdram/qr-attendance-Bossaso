@@ -37,26 +37,33 @@ function Dashboard() {
   const [rows, setRows] = useState<Attendance[]>([]);
   const [staff, setStaff] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
-  const [lateAt, setLateAt] = useState('09:00');
-  const [editingLateAt, setEditingLateAt] = useState(false);
+  const [morningLateAt, setMorningLateAt] = useState('09:00');
+  const [afternoonLateAt, setAfternoonLateAt] = useState('16:30');
+  const [editingThreshold, setEditingThreshold] = useState<'morning' | 'afternoon' | null>(null);
   const [thresholdInput, setThresholdInput] = useState('09:00');
   const [savingThreshold, setSavingThreshold] = useState(false);
+  const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'afternoon'>('all');
 
   const saveThreshold = async () => {
-    if (!thresholdInput) return;
+    if (!thresholdInput || !editingThreshold) return;
     setSavingThreshold(true);
+    const key = editingThreshold === 'morning' ? 'late_after_morning' : 'late_after_afternoon';
     const { error } = await supabase
       .from('app_settings')
       .upsert({
-        setting_key: 'late_after',
+        setting_key: key,
         setting_value: thresholdInput,
         updated_at: new Date().toISOString(),
       });
     if (error) {
       alert(error.message);
     } else {
-      setLateAt(thresholdInput);
-      setEditingLateAt(false);
+      if (editingThreshold === 'morning') {
+        setMorningLateAt(thresholdInput);
+      } else {
+        setAfternoonLateAt(thresholdInput);
+      }
+      setEditingThreshold(null);
       await load();
     }
     setSavingThreshold(false);
@@ -67,19 +74,24 @@ function Dashboard() {
     const [{ data: a }, { data: p }, { data: s }] = await Promise.all([
       supabase
         .from('attendance')
-        .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department)')
+        .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department,shift)')
         .eq('work_date', todayLocal())
         .order('time_in'),
       supabase.from('profiles').select('*').eq('role', 'employee').eq('is_active', true),
       supabase
         .from('app_settings')
-        .select('setting_value')
-        .eq('setting_key', 'late_after')
-        .maybeSingle(),
+        .select('setting_key,setting_value'),
     ]);
     setRows((a || []) as any);
     setStaff((p || []) as Profile[]);
-    if (s?.setting_value) setLateAt(s.setting_value);
+    if (s) {
+      const morn = s.find((x) => x.setting_key === 'late_after_morning')?.setting_value;
+      const legacy = s.find((x) => x.setting_key === 'late_after')?.setting_value;
+      const aft = s.find((x) => x.setting_key === 'late_after_afternoon')?.setting_value;
+      if (morn) setMorningLateAt(morn);
+      else if (legacy) setMorningLateAt(legacy);
+      if (aft) setAfternoonLateAt(aft);
+    }
     setLoading(false);
   };
 
@@ -94,8 +106,16 @@ function Dashboard() {
     };
   }, []);
 
-  const present = rows.length;
-  const late = rows.filter((r) => r.status === 'late').length;
+  const filteredStaff = shiftFilter === 'all'
+    ? staff
+    : staff.filter((s) => (s.shift || 'morning') === shiftFilter);
+
+  const filteredRows = shiftFilter === 'all'
+    ? rows
+    : rows.filter((r) => (r.shift || r.profiles?.shift || 'morning') === shiftFilter);
+
+  const present = filteredRows.length;
+  const late = filteredRows.filter((r) => r.status === 'late').length;
 
   return (
     <>
@@ -108,76 +128,149 @@ function Dashboard() {
             {isFridayLocal() ? 'Weekly day off' : 'Live attendance monitoring'}
           </p>
         </div>
-        <button className="secondary" onClick={load}>
-          <RefreshCw size={16} /> Refresh
-        </button>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <select
+            value={shiftFilter}
+            onChange={(e) => setShiftFilter(e.target.value as any)}
+            style={{
+              border: '1px solid #dce5ee',
+              borderRadius: '9px',
+              padding: '9px 12px',
+              fontSize: '12px',
+              background: '#fff',
+              color: '#334e68',
+              fontWeight: 700,
+            }}
+          >
+            <option value="all">All Shifts</option>
+            <option value="morning">Morning Shift</option>
+            <option value="afternoon">Afternoon Shift</option>
+          </select>
+          <button className="secondary" onClick={load}>
+            <RefreshCw size={16} /> Refresh
+          </button>
+        </div>
       </div>
       <div className="stats-grid">
-        <Stat icon={<Users />} label="Active employees" value={staff.length} />
+        <Stat
+          icon={<Users />}
+          label={shiftFilter === 'all' ? 'Active employees' : `${shiftFilter === 'morning' ? 'Morning' : 'Afternoon'} employees`}
+          value={filteredStaff.length}
+        />
         <Stat icon={<UserCheck />} label="Present today" value={present} tone="green" />
         <Stat icon={<Clock3 />} label="Late arrivals" value={late} tone="amber" />
         <Stat
           icon={<UserX />}
           label="Not checked in"
-          value={isFridayLocal() ? 0 : Math.max(0, staff.length - present)}
+          value={isFridayLocal() ? 0 : Math.max(0, filteredStaff.length - present)}
           tone="red"
         />
       </div>
       <section className="panel">
-        <div className="panel-head">
+        <div className="panel-head" style={{ flexWrap: 'wrap', gap: '14px' }}>
           <div>
             <h2>Today's arrivals</h2>
-            {editingLateAt ? (
-              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
-                <span className="muted">Late threshold:</span>
-                <input
-                  type="time"
-                  value={thresholdInput}
-                  onChange={(e) => setThresholdInput(e.target.value)}
-                  style={{
-                    padding: '3px 8px',
-                    borderRadius: '6px',
-                    border: '1px solid #dce5ee',
-                    fontSize: '12px',
-                  }}
-                />
-                <button
-                  className="small-btn"
-                  style={{ padding: '3px 9px' }}
-                  disabled={savingThreshold}
-                  onClick={saveThreshold}
-                >
-                  {savingThreshold ? 'Saving…' : 'Save'}
-                </button>
-                <button
-                  className="small-btn"
-                  style={{ padding: '3px 9px' }}
-                  onClick={() => setEditingLateAt(false)}
-                >
-                  Cancel
-                </button>
-              </div>
-            ) : (
-              <p className="muted" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                <span>Late threshold: <strong>{lateAt}</strong> · Africa/Mogadishu</span>
-                <button
-                  className="small-btn"
-                  style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}
-                  onClick={() => {
-                    setThresholdInput(lateAt);
-                    setEditingLateAt(true);
-                  }}
-                >
-                  Change
-                </button>
-              </p>
-            )}
+            <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '16px', marginTop: '6px' }}>
+              {/* Morning Threshold */}
+              {editingThreshold === 'morning' ? (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <span className="tiny" style={{ fontWeight: 700, color: '#1d4ed8' }}>Morning late:</span>
+                  <input
+                    type="time"
+                    value={thresholdInput}
+                    onChange={(e) => setThresholdInput(e.target.value)}
+                    style={{
+                      padding: '2px 6px',
+                      borderRadius: '6px',
+                      border: '1px solid #dce5ee',
+                      fontSize: '12px',
+                    }}
+                  />
+                  <button
+                    className="small-btn"
+                    style={{ padding: '2px 8px' }}
+                    disabled={savingThreshold}
+                    onClick={saveThreshold}
+                  >
+                    {savingThreshold ? '…' : 'Save'}
+                  </button>
+                  <button
+                    className="small-btn"
+                    style={{ padding: '2px 8px' }}
+                    onClick={() => setEditingThreshold(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <span>Morning late: <strong style={{ color: '#1d4ed8' }}>{morningLateAt}</strong></span>
+                  <button
+                    className="small-btn"
+                    style={{ padding: '2px 7px', fontSize: '11px', cursor: 'pointer' }}
+                    onClick={() => {
+                      setThresholdInput(morningLateAt);
+                      setEditingThreshold('morning');
+                    }}
+                  >
+                    Change
+                  </button>
+                </span>
+              )}
+
+              {/* Afternoon Threshold */}
+              {editingThreshold === 'afternoon' ? (
+                <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <span className="tiny" style={{ fontWeight: 700, color: '#c2410c' }}>Afternoon late:</span>
+                  <input
+                    type="time"
+                    value={thresholdInput}
+                    onChange={(e) => setThresholdInput(e.target.value)}
+                    style={{
+                      padding: '2px 6px',
+                      borderRadius: '6px',
+                      border: '1px solid #dce5ee',
+                      fontSize: '12px',
+                    }}
+                  />
+                  <button
+                    className="small-btn"
+                    style={{ padding: '2px 8px' }}
+                    disabled={savingThreshold}
+                    onClick={saveThreshold}
+                  >
+                    {savingThreshold ? '…' : 'Save'}
+                  </button>
+                  <button
+                    className="small-btn"
+                    style={{ padding: '2px 8px' }}
+                    onClick={() => setEditingThreshold(null)}
+                  >
+                    ✕
+                  </button>
+                </div>
+              ) : (
+                <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+                  <span>Afternoon late: <strong style={{ color: '#c2410c' }}>{afternoonLateAt}</strong></span>
+                  <button
+                    className="small-btn"
+                    style={{ padding: '2px 7px', fontSize: '11px', cursor: 'pointer' }}
+                    onClick={() => {
+                      setThresholdInput(afternoonLateAt);
+                      setEditingThreshold('afternoon');
+                    }}
+                  >
+                    Change
+                  </button>
+                </span>
+              )}
+            </div>
           </div>
           <Link className="text-link" to="/admin/reports">
             View reports →
           </Link>
         </div>
-        {loading ? <p className="muted">Loading records…</p> : <AttendanceTable rows={rows} />}
+        {loading ? <p className="muted">Loading records…</p> : <AttendanceTable rows={filteredRows} />}
       </section>
     </>
   );
@@ -214,6 +307,7 @@ function AttendanceTable({ rows }: { rows: Attendance[] }) {
             <th>Employee</th>
             <th>Employee ID</th>
             <th>Department</th>
+            <th>Shift</th>
             <th>Time In</th>
             <th>Status</th>
           </tr>
@@ -221,26 +315,34 @@ function AttendanceTable({ rows }: { rows: Attendance[] }) {
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={5} className="empty">
+              <td colSpan={6} className="empty">
                 No attendance recorded yet today.
               </td>
             </tr>
           ) : (
-            rows.map((r) => (
-              <tr key={r.id}>
-                <td>
-                  <strong>{r.profiles?.full_name || 'Employee'}</strong>
-                </td>
-                <td>{r.profiles?.employee_code || '—'}</td>
-                <td>{r.profiles?.department || '—'}</td>
-                <td>{timeLocal(r.time_in)}</td>
-                <td>
-                  <span className={`status ${r.status}`}>
-                    {r.status === 'late' ? 'Late' : 'Present'}
-                  </span>
-                </td>
-              </tr>
-            ))
+            rows.map((r) => {
+              const shift = r.shift || r.profiles?.shift || 'morning';
+              return (
+                <tr key={r.id}>
+                  <td>
+                    <strong>{r.profiles?.full_name || 'Employee'}</strong>
+                  </td>
+                  <td>{r.profiles?.employee_code || '—'}</td>
+                  <td>{r.profiles?.department || '—'}</td>
+                  <td>
+                    <span className={`shift-badge ${shift}`}>
+                      {shift === 'afternoon' ? 'Afternoon' : 'Morning'}
+                    </span>
+                  </td>
+                  <td>{timeLocal(r.time_in)}</td>
+                  <td>
+                    <span className={`status ${r.status}`}>
+                      {r.status === 'late' ? 'Late' : 'Present'}
+                    </span>
+                  </td>
+                </tr>
+              );
+            })
           )}
         </tbody>
       </table>
@@ -256,19 +358,33 @@ function Employees() {
   const [msgType, setMsgType] = useState<'success' | 'error'>('success');
   const [q, setQ] = useState('');
   const [deptFilter, setDeptFilter] = useState('all');
+  const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'afternoon'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
-  const [form, setForm] = useState({
+  const [form, setForm] = useState<{
+    full_name: string;
+    employee_code: string;
+    username: string;
+    password: string;
+    department: string;
+    shift: 'morning' | 'afternoon';
+  }>({
     full_name: '',
     employee_code: '',
     username: '',
     password: '',
     department: '',
+    shift: 'morning',
   });
 
   // Modal States
   const [editEmp, setEditEmp] = useState<Profile | null>(null);
-  const [editForm, setEditForm] = useState({ full_name: '', employee_code: '', department: '' });
+  const [editForm, setEditForm] = useState<{
+    full_name: string;
+    employee_code: string;
+    department: string;
+    shift: 'morning' | 'afternoon';
+  }>({ full_name: '', employee_code: '', department: '', shift: 'morning' });
 
   const [resetEmp, setResetEmp] = useState<Profile | null>(null);
   const [newPassword, setNewPassword] = useState('');
@@ -300,7 +416,7 @@ function Employees() {
       const data = await createEmployeeAccount(form);
       setMsgType('success');
       setMsg(data.message || 'Employee account created successfully.');
-      setForm({ full_name: '', employee_code: '', username: '', password: '', department: '' });
+      setForm({ full_name: '', employee_code: '', username: '', password: '', department: '', shift: 'morning' });
       setShow(false);
       await load();
     } catch (err: any) {
@@ -381,11 +497,12 @@ function Employees() {
       .toLowerCase()
       .includes(q.toLowerCase());
     const matchDept = deptFilter === 'all' || x.department === deptFilter;
+    const matchShift = shiftFilter === 'all' || (x.shift || 'morning') === shiftFilter;
     const matchStatus =
       statusFilter === 'all' ||
       (statusFilter === 'active' && x.is_active) ||
       (statusFilter === 'inactive' && !x.is_active);
-    return matchQuery && matchDept && matchStatus;
+    return matchQuery && matchDept && matchShift && matchStatus;
   });
 
   return (
@@ -442,12 +559,30 @@ function Employees() {
               onChange={(e) => setForm({ ...form, password: e.target.value })}
             />
           </label>
-          <label className="span-2">
+          <label>
             Department (optional)
             <input
               value={form.department}
               onChange={(e) => setForm({ ...form, department: e.target.value })}
             />
+          </label>
+          <label>
+            Work Shift
+            <select
+              value={form.shift}
+              onChange={(e) => setForm({ ...form, shift: e.target.value as any })}
+              style={{
+                border: '1px solid #dce5ee',
+                borderRadius: '8px',
+                padding: '11px 12px',
+                outline: 'none',
+                background: 'white',
+                color: '#193651',
+              }}
+            >
+              <option value="morning">Morning Shift (Late after 09:00)</option>
+              <option value="afternoon">Afternoon Shift (Late after 16:30 / 4:30 PM)</option>
+            </select>
           </label>
           <div className="span-2" style={{ display: 'flex', gap: '10px' }}>
             <button className="primary" disabled={busy}>
@@ -493,6 +628,24 @@ function Employees() {
                   value={editForm.department}
                   onChange={(e) => setEditForm({ ...editForm, department: e.target.value })}
                 />
+              </label>
+              <label>
+                Work Shift
+                <select
+                  value={editForm.shift}
+                  onChange={(e) => setEditForm({ ...editForm, shift: e.target.value as any })}
+                  style={{
+                    border: '1px solid #dce5ee',
+                    borderRadius: '8px',
+                    padding: '10px 12px',
+                    outline: 'none',
+                    background: 'white',
+                    color: '#193651',
+                  }}
+                >
+                  <option value="morning">Morning Shift (Late after 09:00)</option>
+                  <option value="afternoon">Afternoon Shift (Late after 16:30 / 4:30 PM)</option>
+                </select>
               </label>
               <div className="modal-actions">
                 <button type="button" className="secondary" onClick={() => setEditEmp(null)}>
@@ -607,6 +760,23 @@ function Employees() {
               ))}
             </select>
             <select
+              value={shiftFilter}
+              onChange={(e) => setShiftFilter(e.target.value as any)}
+              style={{
+                border: '1px solid #e5ebf1',
+                borderRadius: '8px',
+                padding: '7px 10px',
+                fontSize: '12px',
+                background: '#f5f8fb',
+                color: '#476078',
+                fontWeight: 600,
+              }}
+            >
+              <option value="all">All Shifts</option>
+              <option value="morning">Morning Shift</option>
+              <option value="afternoon">Afternoon Shift</option>
+            </select>
+            <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
               style={{
@@ -633,6 +803,7 @@ function Employees() {
                 <th>Employee ID</th>
                 <th>Username</th>
                 <th>Department</th>
+                <th>Shift</th>
                 <th>Status</th>
                 <th>Actions</th>
               </tr>
@@ -640,68 +811,77 @@ function Employees() {
             <tbody>
               {filtered.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="empty">
+                  <td colSpan={7} className="empty">
                     No employees matching the filter criteria.
                   </td>
                 </tr>
               ) : (
-                filtered.map((p) => (
-                  <tr key={p.id}>
-                    <td>
-                      <strong>{p.full_name}</strong>
-                    </td>
-                    <td>{p.employee_code}</td>
-                    <td>{p.username}</td>
-                    <td>{p.department || '—'}</td>
-                    <td>
-                      <span className={`status ${p.is_active ? 'present' : 'late'}`}>
-                        {p.is_active ? 'Active' : 'Inactive'}
-                      </span>
-                    </td>
-                    <td>
-                      <div className="actions-cell">
-                        <button
-                          className="small-btn"
-                          onClick={() => toggle(p)}
-                          title={p.is_active ? 'Deactivate Account' : 'Activate Account'}
-                        >
-                          {p.is_active ? 'Deactivate' : 'Activate'}
-                        </button>
-                        <button
-                          className="icon-action-btn"
-                          title="Edit Employee"
-                          onClick={() => {
-                            setEditEmp(p);
-                            setEditForm({
-                              full_name: p.full_name,
-                              employee_code: p.employee_code,
-                              department: p.department || '',
-                            });
-                          }}
-                        >
-                          <Pencil size={14} />
-                        </button>
-                        <button
-                          className="icon-action-btn"
-                          title="Reset Password"
-                          onClick={() => {
-                            setResetEmp(p);
-                            setNewPassword('');
-                          }}
-                        >
-                          <KeyRound size={14} />
-                        </button>
-                        <button
-                          className="icon-action-btn delete"
-                          title="Delete Employee"
-                          onClick={() => setDeleteEmp(p)}
-                        >
-                          <Trash2 size={14} />
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))
+                filtered.map((p) => {
+                  const shift = p.shift || 'morning';
+                  return (
+                    <tr key={p.id}>
+                      <td>
+                        <strong>{p.full_name}</strong>
+                      </td>
+                      <td>{p.employee_code}</td>
+                      <td>{p.username}</td>
+                      <td>{p.department || '—'}</td>
+                      <td>
+                        <span className={`shift-badge ${shift}`}>
+                          {shift === 'afternoon' ? 'Afternoon' : 'Morning'}
+                        </span>
+                      </td>
+                      <td>
+                        <span className={`status ${p.is_active ? 'present' : 'late'}`}>
+                          {p.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </td>
+                      <td>
+                        <div className="actions-cell">
+                          <button
+                            className="small-btn"
+                            onClick={() => toggle(p)}
+                            title={p.is_active ? 'Deactivate Account' : 'Activate Account'}
+                          >
+                            {p.is_active ? 'Deactivate' : 'Activate'}
+                          </button>
+                          <button
+                            className="icon-action-btn"
+                            title="Edit Employee"
+                            onClick={() => {
+                              setEditEmp(p);
+                              setEditForm({
+                                full_name: p.full_name,
+                                employee_code: p.employee_code,
+                                department: p.department || '',
+                                shift: p.shift || 'morning',
+                              });
+                            }}
+                          >
+                            <Pencil size={14} />
+                          </button>
+                          <button
+                            className="icon-action-btn"
+                            title="Reset Password"
+                            onClick={() => {
+                              setResetEmp(p);
+                              setNewPassword('');
+                            }}
+                          >
+                            <KeyRound size={14} />
+                          </button>
+                          <button
+                            className="icon-action-btn delete"
+                            title="Delete Employee"
+                            onClick={() => setDeleteEmp(p)}
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
@@ -979,6 +1159,7 @@ function QrDisplay() {
 function Reports() {
   const [from, setFrom] = useState(todayLocal());
   const [to, setTo] = useState(todayLocal());
+  const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'afternoon'>('all');
   const [rows, setRows] = useState<Attendance[]>([]);
   const [loading, setLoading] = useState(false);
 
@@ -986,7 +1167,7 @@ function Reports() {
     setLoading(true);
     const { data, error } = await supabase
       .from('attendance')
-      .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department)')
+      .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department,shift)')
       .gte('work_date', from)
       .lte('work_date', to)
       .order('work_date')
@@ -1000,17 +1181,25 @@ function Reports() {
     load();
   }, []);
 
+  const filteredRows = shiftFilter === 'all'
+    ? rows
+    : rows.filter((r) => (r.shift || r.profiles?.shift || 'morning') === shiftFilter);
+
   const csv = () => {
     const lines = [
-      ['Date', 'Employee', 'Employee ID', 'Department', 'Time In', 'Status'],
-      ...rows.map((r) => [
-        r.work_date,
-        r.profiles?.full_name || '',
-        r.profiles?.employee_code || '',
-        r.profiles?.department || '',
-        timeLocal(r.time_in),
-        r.status,
-      ]),
+      ['Date', 'Employee', 'Employee ID', 'Department', 'Shift', 'Time In', 'Status'],
+      ...filteredRows.map((r) => {
+        const shift = r.shift || r.profiles?.shift || 'morning';
+        return [
+          r.work_date,
+          r.profiles?.full_name || '',
+          r.profiles?.employee_code || '',
+          r.profiles?.department || '',
+          shift === 'afternoon' ? 'Afternoon' : 'Morning',
+          timeLocal(r.time_in),
+          r.status,
+        ];
+      }),
     ];
     const ws = XLSX.utils.aoa_to_sheet(lines);
     ws['!cols'] = [
@@ -1018,6 +1207,7 @@ function Reports() {
       { wch: 28 },
       { wch: 18 },
       { wch: 20 },
+      { wch: 14 },
       { wch: 16 },
       { wch: 12 },
     ];
@@ -1034,7 +1224,7 @@ function Reports() {
           <h1>Attendance reports</h1>
           <p className="muted">Filter records and export a formatted Excel workbook.</p>
         </div>
-        <button className="primary" onClick={csv} disabled={!rows.length}>
+        <button className="primary" onClick={csv} disabled={!filteredRows.length}>
           <Download size={17} /> Export Excel
         </button>
       </div>
@@ -1048,17 +1238,36 @@ function Reports() {
             To
             <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
           </label>
+          <label>
+            Shift
+            <select
+              value={shiftFilter}
+              onChange={(e) => setShiftFilter(e.target.value as any)}
+              style={{
+                border: '1px solid #dce5ee',
+                borderRadius: '8px',
+                padding: '11px 12px',
+                outline: 'none',
+                background: 'white',
+                color: '#193651',
+              }}
+            >
+              <option value="all">All Shifts</option>
+              <option value="morning">Morning Shift</option>
+              <option value="afternoon">Afternoon Shift</option>
+            </select>
+          </label>
           <button className="secondary" onClick={load}>
             <RefreshCw size={16} /> Apply filter
           </button>
         </div>
         <div className="panel-head">
-          <h2>{rows.length} attendance records</h2>
+          <h2>{filteredRows.length} attendance records</h2>
           <span className="muted">
             {from} — {to}
           </span>
         </div>
-        {loading ? <p className="muted">Loading…</p> : <AttendanceTable rows={rows} />}
+        {loading ? <p className="muted">Loading…</p> : <AttendanceTable rows={filteredRows} />}
       </section>
     </>
   );
