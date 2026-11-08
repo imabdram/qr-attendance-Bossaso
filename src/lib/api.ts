@@ -75,41 +75,54 @@ export async function createEmployeeAccount(form: {
   employee_code: string;
   username: string;
   password: string;
-  department?: string;
+  role?: 'admin' | 'employee';
   shift?: 'morning' | 'afternoon';
+  department?: string;
 }): Promise<{ success: boolean; message: string }> {
+  // 1. Try PostgreSQL RPC function first (Zero dependencies, fast, guaranteed without Edge Function)
+  try {
+    const { data: rpcData, error: rpcError } = await supabase.rpc('admin_create_user', {
+      p_full_name: form.full_name,
+      p_employee_code: form.employee_code,
+      p_username: form.username,
+      p_password: form.password,
+      p_role: form.role || 'employee',
+      p_shift: form.shift || 'morning',
+      p_department: form.department || null,
+    });
+
+    if (!rpcError && rpcData) {
+      if (!rpcData.success) {
+        throw new Error(rpcData.message || 'Could not create account.');
+      }
+      return rpcData;
+    }
+  } catch (rpcErr: any) {
+    // If error is not a function-missing error (like duplicate code/username), propagate it
+    if (rpcErr.message && !rpcErr.message.includes('function') && !rpcErr.message.includes('not find')) {
+      throw rpcErr;
+    }
+  }
+
+  // 2. Fallback to Edge Function if deployed
   try {
     const { data, error } = await supabase.functions.invoke('admin-create-employee', {
       body: form,
     });
 
     if (error) {
-      if (
-        error.message?.includes('Failed to send a request') ||
-        error.message?.includes('FunctionsFetchError')
-      ) {
-        throw new Error(
-          'Edge Function "admin-create-employee" is not yet deployed on Supabase. Please deploy Edge Functions using the Supabase CLI, or create users in the Supabase Dashboard under Authentication -> Users.'
-        );
-      }
       throw error;
     }
 
     if (!data?.success) {
-      throw new Error(data?.message || 'Could not create employee account.');
+      throw new Error(data?.message || 'Could not create account.');
     }
 
     return data;
   } catch (err: any) {
-    if (
-      err.message?.includes('Failed to send a request') ||
-      err.message?.includes('FunctionsFetchError')
-    ) {
-      throw new Error(
-        'Edge Function "admin-create-employee" is not deployed yet. Please deploy the function or create user in Supabase Authentication -> Users.'
-      );
-    }
-    throw err;
+    throw new Error(
+      err.message || 'Could not create account. Please ensure migration 005 was run in the Supabase SQL editor.'
+    );
   }
 }
 

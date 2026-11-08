@@ -11,10 +11,11 @@ Deno.serve(async (req) => {
     const auth = req.headers.get('Authorization');
     if (!auth) return json({ message: 'Authentication required.' }, 401);
     const body = await req.json();
-    const { full_name, employee_code, username, password, department, shift } = body;
+    const { full_name, employee_code, username, password, department, shift, role } = body;
     const cleanUsername = String(username || '').trim().toLowerCase();
     const email = cleanUsername + '@attendance-login.example.com';
     const cleanShift = shift === 'afternoon' ? 'afternoon' : 'morning';
+    const cleanRole = role === 'admin' ? 'admin' : 'employee';
 
     if (
       !full_name ||
@@ -62,7 +63,7 @@ Deno.serve(async (req) => {
       full_name,
       employee_code,
       username: cleanUsername,
-      role: 'employee',
+      role: cleanRole,
       department: department || null,
       shift: cleanShift,
       is_active: true,
@@ -71,7 +72,10 @@ Deno.serve(async (req) => {
       await db.auth.admin.deleteUser(created.user.id);
       throw profileErr;
     }
-    return json({ success: true, message: 'Employee account created.' });
+    return json({
+      success: true,
+      message: cleanRole === 'admin' ? 'Admin account created.' : 'Employee account created.',
+    });
   } catch (e) {
     console.error(e);
     const msg = e instanceof Error ? e.message : 'Could not create employee.';

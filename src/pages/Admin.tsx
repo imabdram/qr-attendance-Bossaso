@@ -71,28 +71,43 @@ function Dashboard() {
 
   const load = async () => {
     setLoading(true);
-    const [{ data: a }, { data: p }, { data: s }] = await Promise.all([
-      supabase
+    try {
+      // Query profiles without explicit shift column in the joined select to prevent PostgREST column missing crashes
+      const { data: a, error: aErr } = await supabase
         .from('attendance')
-        .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department,shift)')
+        .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department)')
         .eq('work_date', todayLocal())
-        .order('time_in'),
-      supabase.from('profiles').select('*').eq('role', 'employee').eq('is_active', true),
-      supabase
+        .order('time_in');
+
+      if (aErr) {
+        console.error('Attendance query error:', aErr);
+      } else {
+        setRows((a || []) as any);
+      }
+
+      const { data: p } = await supabase
+        .from('profiles')
+        .select('*')
+        .eq('role', 'employee')
+        .eq('is_active', true);
+      setStaff((p || []) as Profile[]);
+
+      const { data: s } = await supabase
         .from('app_settings')
-        .select('setting_key,setting_value'),
-    ]);
-    setRows((a || []) as any);
-    setStaff((p || []) as Profile[]);
-    if (s) {
-      const morn = s.find((x) => x.setting_key === 'late_after_morning')?.setting_value;
-      const legacy = s.find((x) => x.setting_key === 'late_after')?.setting_value;
-      const aft = s.find((x) => x.setting_key === 'late_after_afternoon')?.setting_value;
-      if (morn) setMorningLateAt(morn);
-      else if (legacy) setMorningLateAt(legacy);
-      if (aft) setAfternoonLateAt(aft);
+        .select('setting_key,setting_value');
+      if (s) {
+        const morn = s.find((x) => x.setting_key === 'late_after_morning')?.setting_value;
+        const legacy = s.find((x) => x.setting_key === 'late_after')?.setting_value;
+        const aft = s.find((x) => x.setting_key === 'late_after_afternoon')?.setting_value;
+        if (morn) setMorningLateAt(morn);
+        else if (legacy) setMorningLateAt(legacy);
+        if (aft) setAfternoonLateAt(aft);
+      }
+    } catch (err) {
+      console.error('Error loading attendance dashboard:', err);
+    } finally {
+      setLoading(false);
     }
-    setLoading(false);
   };
 
   useEffect(() => {
@@ -305,8 +320,7 @@ function AttendanceTable({ rows }: { rows: Attendance[] }) {
         <thead>
           <tr>
             <th>Employee</th>
-            <th>Employee ID</th>
-            <th>Department</th>
+            <th>Phone Number</th>
             <th>Shift</th>
             <th>Time In</th>
             <th>Status</th>
@@ -315,7 +329,7 @@ function AttendanceTable({ rows }: { rows: Attendance[] }) {
         <tbody>
           {rows.length === 0 ? (
             <tr>
-              <td colSpan={6} className="empty">
+              <td colSpan={5} className="empty">
                 No attendance recorded yet today.
               </td>
             </tr>
@@ -328,7 +342,6 @@ function AttendanceTable({ rows }: { rows: Attendance[] }) {
                     <strong>{r.profiles?.full_name || 'Employee'}</strong>
                   </td>
                   <td>{r.profiles?.employee_code || '—'}</td>
-                  <td>{r.profiles?.department || '—'}</td>
                   <td>
                     <span className={`shift-badge ${shift}`}>
                       {shift === 'afternoon' ? 'Afternoon' : 'Morning'}
@@ -357,34 +370,34 @@ function Employees() {
   const [msg, setMsg] = useState('');
   const [msgType, setMsgType] = useState<'success' | 'error'>('success');
   const [q, setQ] = useState('');
-  const [deptFilter, setDeptFilter] = useState('all');
+  const [roleFilter, setRoleFilter] = useState<'all' | 'employee' | 'admin'>('all');
   const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'afternoon'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
+  // Simplified form: Name, Username, Phone Number, Shift (default: morning), Password, Role
   const [form, setForm] = useState<{
     full_name: string;
-    employee_code: string;
+    phone: string;
     username: string;
     password: string;
-    department: string;
     shift: 'morning' | 'afternoon';
+    role: 'employee' | 'admin';
   }>({
     full_name: '',
-    employee_code: '',
+    phone: '',
     username: '',
     password: '',
-    department: '',
     shift: 'morning',
+    role: 'employee',
   });
 
   // Modal States
   const [editEmp, setEditEmp] = useState<Profile | null>(null);
   const [editForm, setEditForm] = useState<{
     full_name: string;
-    employee_code: string;
-    department: string;
+    phone: string;
     shift: 'morning' | 'afternoon';
-  }>({ full_name: '', employee_code: '', department: '', shift: 'morning' });
+  }>({ full_name: '', phone: '', shift: 'morning' });
 
   const [resetEmp, setResetEmp] = useState<Profile | null>(null);
   const [newPassword, setNewPassword] = useState('');
@@ -395,7 +408,6 @@ function Employees() {
     const { data } = await supabase
       .from('profiles')
       .select('*')
-      .eq('role', 'employee')
       .order('full_name');
     setList((data || []) as Profile[]);
   };
@@ -404,24 +416,34 @@ function Employees() {
     load();
   }, []);
 
-  const departments = Array.from(
-    new Set(list.map((x) => x.department).filter(Boolean) as string[])
-  ).sort();
-
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
     setMsg('');
     try {
-      const data = await createEmployeeAccount(form);
+      const data = await createEmployeeAccount({
+        full_name: form.full_name,
+        employee_code: form.phone,
+        username: form.username,
+        password: form.password,
+        shift: form.shift,
+        role: form.role,
+      });
       setMsgType('success');
-      setMsg(data.message || 'Employee account created successfully.');
-      setForm({ full_name: '', employee_code: '', username: '', password: '', department: '', shift: 'morning' });
+      setMsg(data.message || (form.role === 'admin' ? 'Admin account created successfully.' : 'Employee account created successfully.'));
+      setForm({
+        full_name: '',
+        phone: '',
+        username: '',
+        password: '',
+        shift: 'morning',
+        role: 'employee',
+      });
       setShow(false);
       await load();
     } catch (err: any) {
       setMsgType('error');
-      setMsg(err.message || 'Could not create employee.');
+      setMsg(err.message || 'Could not create account.');
     } finally {
       setBusy(false);
     }
@@ -433,7 +455,11 @@ function Employees() {
     setBusy(true);
     setMsg('');
     try {
-      const data = await adminUpdateEmployee(editEmp.id, editForm);
+      const data = await adminUpdateEmployee(editEmp.id, {
+        full_name: editForm.full_name,
+        employee_code: editForm.phone || editEmp.employee_code,
+        shift: editForm.shift,
+      });
       setMsgType('success');
       setMsg(data.message || 'Employee updated successfully.');
       setEditEmp(null);
@@ -493,53 +519,48 @@ function Employees() {
   };
 
   const filtered = list.filter((x) => {
-    const matchQuery = (x.full_name + ' ' + x.employee_code + ' ' + (x.department || ''))
+    const matchQuery = (x.full_name + ' ' + x.employee_code + ' ' + (x.username || ''))
       .toLowerCase()
       .includes(q.toLowerCase());
-    const matchDept = deptFilter === 'all' || x.department === deptFilter;
+    const matchRole = roleFilter === 'all' || x.role === roleFilter;
     const matchShift = shiftFilter === 'all' || (x.shift || 'morning') === shiftFilter;
     const matchStatus =
       statusFilter === 'all' ||
       (statusFilter === 'active' && x.is_active) ||
       (statusFilter === 'inactive' && !x.is_active);
-    return matchQuery && matchDept && matchShift && matchStatus;
+    return matchQuery && matchRole && matchShift && matchStatus;
   });
 
   return (
     <>
       <div className="page-head">
         <div>
-          <p className="eyebrow">PEOPLE</p>
-          <h1>Employees</h1>
-          <p className="muted">Create and manage employee accounts and access.</p>
+          <p className="eyebrow">USER DIRECTORY</p>
+          <h1>Accounts & Staff</h1>
+          <p className="muted">Manage employee and administrator profiles, shifts, and credentials.</p>
         </div>
         <button className="primary" onClick={() => setShow(!show)}>
-          <Plus size={17} /> Add employee
+          <Plus size={17} /> Add Account
         </button>
       </div>
 
       {msg && <div className={`alert ${msgType}`}>{msg}</div>}
 
-      {/* Add Employee Form */}
+      {/* Simplified User / Admin Creation Form */}
       {show && (
         <form className="panel form-grid" onSubmit={add}>
-          <h2 className="span-2">New employee account</h2>
+          <h2 className="span-2">New Account</h2>
+
           <label>
             Full name
             <input
               required
+              placeholder="e.g. Ahmed Ali"
               value={form.full_name}
               onChange={(e) => setForm({ ...form, full_name: e.target.value })}
             />
           </label>
-          <label>
-            Employee ID
-            <input
-              required
-              value={form.employee_code}
-              onChange={(e) => setForm({ ...form, employee_code: e.target.value })}
-            />
-          </label>
+
           <label>
             Username
             <input
@@ -550,24 +571,19 @@ function Employees() {
               placeholder="e.g. ahmed01"
             />
           </label>
+
           <label>
-            Temporary password
+            Phone Number
             <input
               required
-              minLength={8}
-              value={form.password}
-              onChange={(e) => setForm({ ...form, password: e.target.value })}
+              placeholder="e.g. 0615123456"
+              value={form.phone}
+              onChange={(e) => setForm({ ...form, phone: e.target.value })}
             />
           </label>
+
           <label>
-            Department (optional)
-            <input
-              value={form.department}
-              onChange={(e) => setForm({ ...form, department: e.target.value })}
-            />
-          </label>
-          <label>
-            Work Shift
+            Shift
             <select
               value={form.shift}
               onChange={(e) => setForm({ ...form, shift: e.target.value as any })}
@@ -581,12 +597,43 @@ function Employees() {
               }}
             >
               <option value="morning">Morning Shift (Late after 09:00)</option>
-              <option value="afternoon">Afternoon Shift (Late after 16:30 / 4:30 PM)</option>
+              <option value="afternoon">Afternoon Shift (Late after 16:30)</option>
             </select>
           </label>
-          <div className="span-2" style={{ display: 'flex', gap: '10px' }}>
+
+          <label>
+            Role
+            <select
+              value={form.role}
+              onChange={(e) => setForm({ ...form, role: e.target.value as any })}
+              style={{
+                border: '1px solid #dce5ee',
+                borderRadius: '8px',
+                padding: '11px 12px',
+                outline: 'none',
+                background: 'white',
+                color: '#193651',
+              }}
+            >
+              <option value="employee">Employee (Scan QR attendance)</option>
+              <option value="admin">Administrator (Full admin portal access)</option>
+            </select>
+          </label>
+
+          <label>
+            Temporary password
+            <input
+              required
+              minLength={8}
+              placeholder="Minimum 8 characters"
+              value={form.password}
+              onChange={(e) => setForm({ ...form, password: e.target.value })}
+            />
+          </label>
+
+          <div className="span-2" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
             <button className="primary" disabled={busy}>
-              {busy ? 'Creating…' : 'Create account'}
+              {busy ? 'Creating…' : form.role === 'admin' ? 'Create Admin Account' : 'Create Employee Account'}
             </button>
             <button type="button" className="secondary" onClick={() => setShow(false)}>
               Cancel
@@ -600,59 +647,57 @@ function Employees() {
         <div className="modal-overlay" onClick={() => setEditEmp(null)}>
           <div className="modal-content" onClick={(e) => e.stopPropagation()}>
             <div className="modal-header">
-              <h3>Edit Employee</h3>
+              <div>
+                <h3>Edit Profile & Shift</h3>
+                <p className="muted" style={{ margin: '2px 0 0', fontSize: '13px' }}>
+                  Update account details for <strong>{editEmp.full_name}</strong> (@{editEmp.username})
+                </p>
+              </div>
               <button className="icon-action-btn" onClick={() => setEditEmp(null)}>
                 <X size={16} />
               </button>
             </div>
-            <form onSubmit={handleEdit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
-              <label>
-                Full name
+            <form onSubmit={handleEdit} className="modal-form-group">
+              <div className="modal-field">
+                <span className="modal-field-label">Full Name</span>
                 <input
                   required
+                  className="modal-input"
+                  placeholder="Employee name"
                   value={editForm.full_name}
                   onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
                 />
-              </label>
-              <label>
-                Employee ID
+              </div>
+
+              <div className="modal-field">
+                <span className="modal-field-label">Phone Number</span>
                 <input
                   required
-                  value={editForm.employee_code}
-                  onChange={(e) => setEditForm({ ...editForm, employee_code: e.target.value })}
+                  className="modal-input"
+                  placeholder="e.g. 0615123456"
+                  value={editForm.phone}
+                  onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
                 />
-              </label>
-              <label>
-                Department
-                <input
-                  value={editForm.department}
-                  onChange={(e) => setEditForm({ ...editForm, department: e.target.value })}
-                />
-              </label>
-              <label>
-                Work Shift
+              </div>
+
+              <div className="modal-field">
+                <span className="modal-field-label">Work Shift</span>
                 <select
+                  className="modal-select"
                   value={editForm.shift}
                   onChange={(e) => setEditForm({ ...editForm, shift: e.target.value as any })}
-                  style={{
-                    border: '1px solid #dce5ee',
-                    borderRadius: '8px',
-                    padding: '10px 12px',
-                    outline: 'none',
-                    background: 'white',
-                    color: '#193651',
-                  }}
                 >
-                  <option value="morning">Morning Shift (Late after 09:00)</option>
-                  <option value="afternoon">Afternoon Shift (Late after 16:30 / 4:30 PM)</option>
+                  <option value="morning">☀️ Morning Shift (Late after 09:00 AM)</option>
+                  <option value="afternoon">🌙 Afternoon Shift (Late after 04:30 PM)</option>
                 </select>
-              </label>
+              </div>
+
               <div className="modal-actions">
                 <button type="button" className="secondary" onClick={() => setEditEmp(null)}>
                   Cancel
                 </button>
                 <button className="primary" disabled={busy}>
-                  {busy ? 'Saving…' : 'Save Changes'}
+                  {busy ? 'Saving Changes…' : 'Save Changes'}
                 </button>
               </div>
             </form>
@@ -709,7 +754,7 @@ function Employees() {
               </button>
             </div>
             <p style={{ margin: '10px 0', lineHeight: '1.5' }}>
-              Are you sure you want to permanently delete <strong>{deleteEmp.full_name}</strong> (ID: {deleteEmp.employee_code})?
+              Are you sure you want to permanently delete <strong>{deleteEmp.full_name}</strong> (@{deleteEmp.username})?
             </p>
             <p className="muted" style={{ fontSize: '12px', color: '#dc2626' }}>
               This will remove their login account, profile, and attendance history. This action cannot be undone.
@@ -726,22 +771,22 @@ function Employees() {
         </div>
       )}
 
-      {/* Employee List Section */}
+      {/* Employee & Admin List Section */}
       <section className="panel">
         <div className="panel-head" style={{ flexWrap: 'wrap', gap: '12px' }}>
-          <h2>Employee directory ({filtered.length})</h2>
+          <h2>Accounts Directory ({filtered.length})</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <div className="searchbox">
               <Search size={16} />
               <input
-                placeholder="Search employees…"
+                placeholder="Search name, username, number…"
                 value={q}
                 onChange={(e) => setQ(e.target.value)}
               />
             </div>
             <select
-              value={deptFilter}
-              onChange={(e) => setDeptFilter(e.target.value)}
+              value={roleFilter}
+              onChange={(e) => setRoleFilter(e.target.value as any)}
               style={{
                 border: '1px solid #e5ebf1',
                 borderRadius: '8px',
@@ -752,12 +797,9 @@ function Employees() {
                 fontWeight: 600,
               }}
             >
-              <option value="all">All Departments</option>
-              {departments.map((d) => (
-                <option key={d} value={d}>
-                  {d}
-                </option>
-              ))}
+              <option value="all">All Roles</option>
+              <option value="employee">Employees Only</option>
+              <option value="admin">Administrators Only</option>
             </select>
             <select
               value={shiftFilter}
@@ -800,9 +842,9 @@ function Employees() {
             <thead>
               <tr>
                 <th>Name</th>
-                <th>Employee ID</th>
+                <th>Role</th>
+                <th>Phone Number</th>
                 <th>Username</th>
-                <th>Department</th>
                 <th>Shift</th>
                 <th>Status</th>
                 <th>Actions</th>
@@ -812,7 +854,7 @@ function Employees() {
               {filtered.length === 0 ? (
                 <tr>
                   <td colSpan={7} className="empty">
-                    No employees matching the filter criteria.
+                    No accounts matching the filter criteria.
                   </td>
                 </tr>
               ) : (
@@ -823,9 +865,26 @@ function Employees() {
                       <td>
                         <strong>{p.full_name}</strong>
                       </td>
+                      <td>
+                        <span
+                          style={{
+                            display: 'inline-block',
+                            padding: '3px 8px',
+                            borderRadius: '6px',
+                            fontSize: '11px',
+                            fontWeight: 700,
+                            textTransform: 'uppercase',
+                            letterSpacing: '0.04em',
+                            background: p.role === 'admin' ? '#fdf2f8' : '#eff6ff',
+                            color: p.role === 'admin' ? '#be185d' : '#1d4ed8',
+                            border: `1px solid ${p.role === 'admin' ? '#fbcfe8' : '#bfdbfe'}`,
+                          }}
+                        >
+                          {p.role}
+                        </span>
+                      </td>
                       <td>{p.employee_code}</td>
                       <td>{p.username}</td>
-                      <td>{p.department || '—'}</td>
                       <td>
                         <span className={`shift-badge ${shift}`}>
                           {shift === 'afternoon' ? 'Afternoon' : 'Morning'}
@@ -847,13 +906,12 @@ function Employees() {
                           </button>
                           <button
                             className="icon-action-btn"
-                            title="Edit Employee"
+                            title="Edit Profile & Shift"
                             onClick={() => {
                               setEditEmp(p);
                               setEditForm({
                                 full_name: p.full_name,
-                                employee_code: p.employee_code,
-                                department: p.department || '',
+                                phone: p.employee_code,
                                 shift: p.shift || 'morning',
                               });
                             }}
@@ -870,13 +928,15 @@ function Employees() {
                           >
                             <KeyRound size={14} />
                           </button>
-                          <button
-                            className="icon-action-btn delete"
-                            title="Delete Employee"
-                            onClick={() => setDeleteEmp(p)}
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {p.role !== 'admin' && (
+                            <button
+                              className="icon-action-btn delete"
+                              title="Delete Account"
+                              onClick={() => setDeleteEmp(p)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1167,12 +1227,15 @@ function Reports() {
     setLoading(true);
     const { data, error } = await supabase
       .from('attendance')
-      .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department,shift)')
+      .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department)')
       .gte('work_date', from)
       .lte('work_date', to)
       .order('work_date')
       .order('time_in');
-    if (error) alert(error.message);
+
+    if (error) {
+      console.error('Reports load error:', error);
+    }
     setRows((data || []) as any);
     setLoading(false);
   };

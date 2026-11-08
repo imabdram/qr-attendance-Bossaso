@@ -122,7 +122,7 @@ export default function Employee({ profile }: { profile: Profile }) {
           <p className="eyebrow">EMPLOYEE PORTAL</p>
           <h1>Hello, {profile.full_name.split(' ')[0]}</h1>
           <p className="muted" style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap', marginTop: '4px' }}>
-            <span>{profile.department ? `${profile.department} · ` : ''}ID: {profile.employee_code}</span>
+            <span>@{profile.username} · {profile.employee_code}</span>
             <span className={`shift-badge ${profile.shift || 'morning'}`}>
               {(profile.shift || 'morning') === 'afternoon' ? 'Afternoon Shift (Late after 4:30 PM)' : 'Morning Shift (Late after 9:00 AM)'}
             </span>
@@ -308,7 +308,7 @@ export default function Employee({ profile }: { profile: Profile }) {
       )}
 
       <p className="tiny muted center" style={{ marginTop: '20px' }}>
-        Employee ID: {profile.employee_code} · Verified Mogadishu Server Time
+        Verified Mogadishu Server Time (UTC+3)
       </p>
     </main>
   );
