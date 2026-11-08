@@ -27,3 +27,116 @@
   .print-only-sub{display:block !important;font-size:14px;color:#526980;margin-bottom:24px}
 }
 .print-only-title,.print-only-sub{display:none}
+
+/* Modals & Dialogs */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(16, 42, 67, 0.45);
+  backdrop-filter: blur(2px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 16px;
+}
+.modal-content {
+  background: #fff;
+  border-radius: 16px;
+  max-width: 480px;
+  width: 100%;
+  padding: 24px;
+  box-shadow: 0 20px 50px rgba(16, 42, 67, 0.2);
+  border: 1px solid #e2e8f0;
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+.modal-header h3 {
+  margin: 0;
+  font-family: 'Manrope', sans-serif;
+  font-size: 18px;
+  font-weight: 800;
+  color: #102a43;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 20px;
+}
+.btn-danger {
+  background: #dc2626 !important;
+  color: #fff !important;
+  border: none !important;
+}
+.btn-danger:hover {
+  background: #b91c1c !important;
+}
+.actions-cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.icon-action-btn {
+  border: 1px solid #dce5ee;
+  background: white;
+  border-radius: 6px;
+  padding: 5px;
+  color: #476078;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.icon-action-btn:hover {
+  background: #f1f5f9;
+  color: #102a43;
+}
+.icon-action-btn.delete:hover {
+  background: #fef2f2;
+  color: #dc2626;
+  border-color: #fca5a5;
+}
+
+/* Tabs & Employee Self-Service */
+.tabs-nav {
+  display: flex;
+  gap: 8px;
+  background: #f1f5f9;
+  padding: 4px;
+  border-radius: 12px;
+  margin-bottom: 20px;
+}
+.tab-btn {
+  flex: 1;
+  border: none;
+  background: transparent;
+  padding: 10px 14px;
+  border-radius: 9px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #62768b;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  transition: all .15s ease;
+}
+.tab-btn.active {
+  background: #fff;
+  color: #1265a8;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+.history-card {
+  background: #fff;
+  border: 1px solid #e5edf4;
+  border-radius: 14px;
+  padding: 20px;
+  box-shadow: 0 3px 14px #102a4307;
+}

@@ -1,7 +1,13 @@
 import { useEffect, useState, useRef } from 'react';
 import { Routes, Route, Link } from 'react-router-dom';
 import { supabase } from '../lib/supabase';
-import { generateQrToken, createEmployeeAccount } from '../lib/api';
+import {
+  generateQrToken,
+  createEmployeeAccount,
+  adminDeleteEmployee,
+  adminResetPassword,
+  adminUpdateEmployee,
+} from '../lib/api';
 import type { Attendance, Profile } from '../lib/types';
 import { todayLocal, timeLocal, dateLabel, isFridayLocal } from '../lib/date';
 import {
@@ -18,6 +24,11 @@ import {
   Hand,
   Printer,
   Sparkles,
+  Pencil,
+  Trash2,
+  KeyRound,
+  X,
+  Filter,
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
 import * as XLSX from 'xlsx';
@@ -244,6 +255,9 @@ function Employees() {
   const [msg, setMsg] = useState('');
   const [msgType, setMsgType] = useState<'success' | 'error'>('success');
   const [q, setQ] = useState('');
+  const [deptFilter, setDeptFilter] = useState('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
+
   const [form, setForm] = useState({
     full_name: '',
     employee_code: '',
@@ -251,6 +265,15 @@ function Employees() {
     password: '',
     department: '',
   });
+
+  // Modal States
+  const [editEmp, setEditEmp] = useState<Profile | null>(null);
+  const [editForm, setEditForm] = useState({ full_name: '', employee_code: '', department: '' });
+
+  const [resetEmp, setResetEmp] = useState<Profile | null>(null);
+  const [newPassword, setNewPassword] = useState('');
+
+  const [deleteEmp, setDeleteEmp] = useState<Profile | null>(null);
 
   const load = async () => {
     const { data } = await supabase
@@ -264,6 +287,10 @@ function Employees() {
   useEffect(() => {
     load();
   }, []);
+
+  const departments = Array.from(
+    new Set(list.map((x) => x.department).filter(Boolean) as string[])
+  ).sort();
 
   const add = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -284,11 +311,61 @@ function Employees() {
     }
   };
 
-  const filtered = list.filter((x) =>
-    (x.full_name + ' ' + x.employee_code + ' ' + (x.department || ''))
-      .toLowerCase()
-      .includes(q.toLowerCase())
-  );
+  const handleEdit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editEmp) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      const data = await adminUpdateEmployee(editEmp.id, editForm);
+      setMsgType('success');
+      setMsg(data.message || 'Employee updated successfully.');
+      setEditEmp(null);
+      await load();
+    } catch (err: any) {
+      setMsgType('error');
+      setMsg(err.message || 'Could not update employee.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleResetPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!resetEmp) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      const data = await adminResetPassword(resetEmp.id, newPassword);
+      setMsgType('success');
+      setMsg(data.message || `Password reset for ${resetEmp.full_name}.`);
+      setResetEmp(null);
+      setNewPassword('');
+    } catch (err: any) {
+      setMsgType('error');
+      setMsg(err.message || 'Could not reset password.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteEmp) return;
+    setBusy(true);
+    setMsg('');
+    try {
+      const data = await adminDeleteEmployee(deleteEmp.id);
+      setMsgType('success');
+      setMsg(data.message || 'Employee deleted successfully.');
+      setDeleteEmp(null);
+      await load();
+    } catch (err: any) {
+      setMsgType('error');
+      setMsg(err.message || 'Could not delete employee.');
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const toggle = async (p: Profile) => {
     const { error } = await supabase
@@ -299,19 +376,34 @@ function Employees() {
     else load();
   };
 
+  const filtered = list.filter((x) => {
+    const matchQuery = (x.full_name + ' ' + x.employee_code + ' ' + (x.department || ''))
+      .toLowerCase()
+      .includes(q.toLowerCase());
+    const matchDept = deptFilter === 'all' || x.department === deptFilter;
+    const matchStatus =
+      statusFilter === 'all' ||
+      (statusFilter === 'active' && x.is_active) ||
+      (statusFilter === 'inactive' && !x.is_active);
+    return matchQuery && matchDept && matchStatus;
+  });
+
   return (
     <>
       <div className="page-head">
         <div>
           <p className="eyebrow">PEOPLE</p>
           <h1>Employees</h1>
-          <p className="muted">Create and manage employee accounts.</p>
+          <p className="muted">Create and manage employee accounts and access.</p>
         </div>
         <button className="primary" onClick={() => setShow(!show)}>
           <Plus size={17} /> Add employee
         </button>
       </div>
+
       {msg && <div className={`alert ${msgType}`}>{msg}</div>}
+
+      {/* Add Employee Form */}
       {show && (
         <form className="panel form-grid" onSubmit={add}>
           <h2 className="span-2">New employee account</h2>
@@ -357,23 +449,180 @@ function Employees() {
               onChange={(e) => setForm({ ...form, department: e.target.value })}
             />
           </label>
-          <div className="span-2">
+          <div className="span-2" style={{ display: 'flex', gap: '10px' }}>
             <button className="primary" disabled={busy}>
               {busy ? 'Creating…' : 'Create account'}
+            </button>
+            <button type="button" className="secondary" onClick={() => setShow(false)}>
+              Cancel
             </button>
           </div>
         </form>
       )}
+
+      {/* Edit Employee Modal */}
+      {editEmp && (
+        <div className="modal-overlay" onClick={() => setEditEmp(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Edit Employee</h3>
+              <button className="icon-action-btn" onClick={() => setEditEmp(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <form onSubmit={handleEdit} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <label>
+                Full name
+                <input
+                  required
+                  value={editForm.full_name}
+                  onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
+                />
+              </label>
+              <label>
+                Employee ID
+                <input
+                  required
+                  value={editForm.employee_code}
+                  onChange={(e) => setEditForm({ ...editForm, employee_code: e.target.value })}
+                />
+              </label>
+              <label>
+                Department
+                <input
+                  value={editForm.department}
+                  onChange={(e) => setEditForm({ ...editForm, department: e.target.value })}
+                />
+              </label>
+              <div className="modal-actions">
+                <button type="button" className="secondary" onClick={() => setEditEmp(null)}>
+                  Cancel
+                </button>
+                <button className="primary" disabled={busy}>
+                  {busy ? 'Saving…' : 'Save Changes'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Password Modal */}
+      {resetEmp && (
+        <div className="modal-overlay" onClick={() => setResetEmp(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Reset Password</h3>
+              <button className="icon-action-btn" onClick={() => setResetEmp(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <p className="muted" style={{ marginBottom: '14px' }}>
+              Set a new password for <strong>{resetEmp.full_name}</strong> (@{resetEmp.username}).
+            </p>
+            <form onSubmit={handleResetPassword} style={{ display: 'flex', flexDirection: 'column', gap: '14px' }}>
+              <label>
+                New Password (minimum 8 characters)
+                <input
+                  required
+                  type="password"
+                  minLength={8}
+                  placeholder="Enter new password"
+                  value={newPassword}
+                  onChange={(e) => setNewPassword(e.target.value)}
+                />
+              </label>
+              <div className="modal-actions">
+                <button type="button" className="secondary" onClick={() => setResetEmp(null)}>
+                  Cancel
+                </button>
+                <button className="primary" disabled={busy || newPassword.length < 8}>
+                  {busy ? 'Updating…' : 'Set Password'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {deleteEmp && (
+        <div className="modal-overlay" onClick={() => setDeleteEmp(null)}>
+          <div className="modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="modal-header">
+              <h3>Delete Employee</h3>
+              <button className="icon-action-btn" onClick={() => setDeleteEmp(null)}>
+                <X size={16} />
+              </button>
+            </div>
+            <p style={{ margin: '10px 0', lineHeight: '1.5' }}>
+              Are you sure you want to permanently delete <strong>{deleteEmp.full_name}</strong> (ID: {deleteEmp.employee_code})?
+            </p>
+            <p className="muted" style={{ fontSize: '12px', color: '#dc2626' }}>
+              This will remove their login account, profile, and attendance history. This action cannot be undone.
+            </p>
+            <div className="modal-actions">
+              <button type="button" className="secondary" onClick={() => setDeleteEmp(null)}>
+                Cancel
+              </button>
+              <button className="primary btn-danger" disabled={busy} onClick={handleDelete}>
+                {busy ? 'Deleting…' : 'Delete Permanently'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Employee List Section */}
       <section className="panel">
-        <div className="panel-head">
-          <h2>Employee directory ({list.length})</h2>
-          <div className="searchbox">
-            <Search size={16} />
-            <input
-              placeholder="Search employees"
-              value={q}
-              onChange={(e) => setQ(e.target.value)}
-            />
+        <div className="panel-head" style={{ flexWrap: 'wrap', gap: '12px' }}>
+          <h2>Employee directory ({filtered.length})</h2>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+            <div className="searchbox">
+              <Search size={16} />
+              <input
+                placeholder="Search employees…"
+                value={q}
+                onChange={(e) => setQ(e.target.value)}
+              />
+            </div>
+            <select
+              value={deptFilter}
+              onChange={(e) => setDeptFilter(e.target.value)}
+              style={{
+                border: '1px solid #e5ebf1',
+                borderRadius: '8px',
+                padding: '7px 10px',
+                fontSize: '12px',
+                background: '#f5f8fb',
+                color: '#476078',
+                fontWeight: 600,
+              }}
+            >
+              <option value="all">All Departments</option>
+              {departments.map((d) => (
+                <option key={d} value={d}>
+                  {d}
+                </option>
+              ))}
+            </select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+              style={{
+                border: '1px solid #e5ebf1',
+                borderRadius: '8px',
+                padding: '7px 10px',
+                fontSize: '12px',
+                background: '#f5f8fb',
+                color: '#476078',
+                fontWeight: 600,
+              }}
+            >
+              <option value="all">All Status</option>
+              <option value="active">Active Only</option>
+              <option value="inactive">Inactive Only</option>
+            </select>
           </div>
         </div>
         <div className="table-wrap">
@@ -384,31 +633,76 @@ function Employees() {
                 <th>Employee ID</th>
                 <th>Username</th>
                 <th>Department</th>
-                <th>Account</th>
-                <th>Action</th>
+                <th>Status</th>
+                <th>Actions</th>
               </tr>
             </thead>
             <tbody>
-              {filtered.map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <strong>{p.full_name}</strong>
-                  </td>
-                  <td>{p.employee_code}</td>
-                  <td>{p.username}</td>
-                  <td>{p.department || '—'}</td>
-                  <td>
-                    <span className={`status ${p.is_active ? 'present' : 'late'}`}>
-                      {p.is_active ? 'Active' : 'Inactive'}
-                    </span>
-                  </td>
-                  <td>
-                    <button className="small-btn" onClick={() => toggle(p)}>
-                      {p.is_active ? 'Deactivate' : 'Activate'}
-                    </button>
+              {filtered.length === 0 ? (
+                <tr>
+                  <td colSpan={6} className="empty">
+                    No employees matching the filter criteria.
                   </td>
                 </tr>
-              ))}
+              ) : (
+                filtered.map((p) => (
+                  <tr key={p.id}>
+                    <td>
+                      <strong>{p.full_name}</strong>
+                    </td>
+                    <td>{p.employee_code}</td>
+                    <td>{p.username}</td>
+                    <td>{p.department || '—'}</td>
+                    <td>
+                      <span className={`status ${p.is_active ? 'present' : 'late'}`}>
+                        {p.is_active ? 'Active' : 'Inactive'}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="actions-cell">
+                        <button
+                          className="small-btn"
+                          onClick={() => toggle(p)}
+                          title={p.is_active ? 'Deactivate Account' : 'Activate Account'}
+                        >
+                          {p.is_active ? 'Deactivate' : 'Activate'}
+                        </button>
+                        <button
+                          className="icon-action-btn"
+                          title="Edit Employee"
+                          onClick={() => {
+                            setEditEmp(p);
+                            setEditForm({
+                              full_name: p.full_name,
+                              employee_code: p.employee_code,
+                              department: p.department || '',
+                            });
+                          }}
+                        >
+                          <Pencil size={14} />
+                        </button>
+                        <button
+                          className="icon-action-btn"
+                          title="Reset Password"
+                          onClick={() => {
+                            setResetEmp(p);
+                            setNewPassword('');
+                          }}
+                        >
+                          <KeyRound size={14} />
+                        </button>
+                        <button
+                          className="icon-action-btn delete"
+                          title="Delete Employee"
+                          onClick={() => setDeleteEmp(p)}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              )}
             </tbody>
           </table>
         </div>

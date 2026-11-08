@@ -111,3 +111,42 @@ export async function createEmployeeAccount(form: {
     throw err;
   }
 }
+
+export async function adminDeleteEmployee(
+  employeeId: string
+): Promise<{ success: boolean; message: string }> {
+  const { data, error } = await supabase.rpc('admin_delete_employee', {
+    p_employee_id: employeeId,
+  });
+  if (error) throw new Error(error.message);
+  if (!data?.success) throw new Error(data?.message || 'Could not delete employee.');
+  return data;
+}
+
+export async function adminResetPassword(
+  employeeId: string,
+  newPassword: string
+): Promise<{ success: boolean; message: string }> {
+  const { data, error } = await supabase.rpc('admin_reset_password', {
+    p_employee_id: employeeId,
+    p_new_password: newPassword,
+  });
+  if (error) throw new Error(error.message);
+  if (!data?.success) throw new Error(data?.message || 'Could not reset password.');
+  return data;
+}
+
+export async function adminUpdateEmployee(
+  employeeId: string,
+  form: { full_name: string; employee_code: string; department?: string }
+): Promise<{ success: boolean; message: string }> {
+  const { data, error } = await supabase.rpc('admin_update_employee', {
+    p_employee_id: employeeId,
+    p_full_name: form.full_name,
+    p_employee_code: form.employee_code,
+    p_department: form.department || null,
+  });
+  if (error) throw new Error(error.message);
+  if (!data?.success) throw new Error(data?.message || 'Could not update employee.');
+  return data;
+}
