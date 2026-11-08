@@ -27,6 +27,29 @@ function Dashboard() {
   const [staff, setStaff] = useState<Profile[]>([]);
   const [loading, setLoading] = useState(true);
   const [lateAt, setLateAt] = useState('09:00');
+  const [editingLateAt, setEditingLateAt] = useState(false);
+  const [thresholdInput, setThresholdInput] = useState('09:00');
+  const [savingThreshold, setSavingThreshold] = useState(false);
+
+  const saveThreshold = async () => {
+    if (!thresholdInput) return;
+    setSavingThreshold(true);
+    const { error } = await supabase
+      .from('app_settings')
+      .upsert({
+        setting_key: 'late_after',
+        setting_value: thresholdInput,
+        updated_at: new Date().toISOString(),
+      });
+    if (error) {
+      alert(error.message);
+    } else {
+      setLateAt(thresholdInput);
+      setEditingLateAt(false);
+      await load();
+    }
+    setSavingThreshold(false);
+  };
 
   const load = async () => {
     setLoading(true);
@@ -93,7 +116,51 @@ function Dashboard() {
         <div className="panel-head">
           <div>
             <h2>Today's arrivals</h2>
-            <p className="muted">Late threshold: {lateAt} · Africa/Mogadishu</p>
+            {editingLateAt ? (
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+                <span className="muted">Late threshold:</span>
+                <input
+                  type="time"
+                  value={thresholdInput}
+                  onChange={(e) => setThresholdInput(e.target.value)}
+                  style={{
+                    padding: '3px 8px',
+                    borderRadius: '6px',
+                    border: '1px solid #dce5ee',
+                    fontSize: '12px',
+                  }}
+                />
+                <button
+                  className="small-btn"
+                  style={{ padding: '3px 9px' }}
+                  disabled={savingThreshold}
+                  onClick={saveThreshold}
+                >
+                  {savingThreshold ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  className="small-btn"
+                  style={{ padding: '3px 9px' }}
+                  onClick={() => setEditingLateAt(false)}
+                >
+                  Cancel
+                </button>
+              </div>
+            ) : (
+              <p className="muted" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <span>Late threshold: <strong>{lateAt}</strong> · Africa/Mogadishu</span>
+                <button
+                  className="small-btn"
+                  style={{ padding: '2px 8px', fontSize: '11px', cursor: 'pointer' }}
+                  onClick={() => {
+                    setThresholdInput(lateAt);
+                    setEditingLateAt(true);
+                  }}
+                >
+                  Change
+                </button>
+              </p>
+            )}
           </div>
           <Link className="text-link" to="/admin/reports">
             View reports →
