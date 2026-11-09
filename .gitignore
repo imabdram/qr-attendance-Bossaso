@@ -30,6 +30,11 @@ skills-lock.json
 .env
 .env.local
 .env.*.local
+.env.*
+!.env.example
+
+# One-off local SQL scripts (may contain credentials)
+/*.sql
 
 # Supabase CLI
 supabase/.temp/
