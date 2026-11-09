@@ -1,7 +1,7 @@
 export type Profile = {
   id: string;
   full_name: string;
-  employee_code: string;
+  employee_number: string;
   username: string;
   role: 'admin' | 'employee';
   department: string | null;
@@ -16,5 +16,5 @@ export type Attendance = {
   time_in: string;
   status: 'present' | 'late';
   shift?: 'morning' | 'afternoon';
-  profiles?: Pick<Profile, 'full_name' | 'employee_code' | 'department' | 'shift'>;
+  profiles?: Pick<Profile, 'full_name' | 'employee_number' | 'department' | 'shift'>;
 };

@@ -21,7 +21,7 @@ on conflict (setting_key) do nothing;
 create or replace function public.admin_update_employee(
   p_employee_id uuid,
   p_full_name text,
-  p_employee_code text,
+  p_employee_number text,
   p_department text,
   p_shift text default 'morning'
 )
@@ -39,12 +39,12 @@ begin
     return json_build_object('success', false, 'message', 'Unauthorized: Admin access required.');
   end if;
 
-  if trim(coalesce(p_full_name, '')) = '' or trim(coalesce(p_employee_code, '')) = '' then
+  if trim(coalesce(p_full_name, '')) = '' or trim(coalesce(p_employee_number, '')) = '' then
     return json_build_object('success', false, 'message', 'Full name and Employee ID / Number cannot be empty.');
   end if;
 
-  -- Check if employee_code is taken by someone else
-  if exists (select 1 from public.profiles where employee_code = trim(p_employee_code) and id <> p_employee_id) then
+  -- Check if employee_number is taken by someone else
+  if exists (select 1 from public.profiles where employee_number = trim(p_employee_number) and id <> p_employee_id) then
     return json_build_object('success', false, 'message', 'Employee ID / Number is already in use by another person.');
   end if;
 
@@ -52,7 +52,7 @@ begin
 
   update public.profiles
   set full_name = trim(p_full_name),
-      employee_code = trim(p_employee_code),
+      employee_number = trim(p_employee_number),
       department = nullif(trim(p_department), ''),
       shift = v_clean_shift
   where id = p_employee_id;
@@ -75,7 +75,7 @@ grant execute on function public.admin_update_employee(uuid, text, text, text, t
 -- This works even if Supabase Edge Functions are not deployed!
 create or replace function public.admin_create_user(
   p_full_name text,
-  p_employee_code text,
+  p_employee_number text,
   p_username text,
   p_password text,
   p_role text default 'employee',
@@ -106,7 +106,7 @@ begin
     return json_build_object('success', false, 'message', 'Username must be at least 3 characters.');
   end if;
 
-  if trim(coalesce(p_full_name, '')) = '' or trim(coalesce(p_employee_code, '')) = '' then
+  if trim(coalesce(p_full_name, '')) = '' or trim(coalesce(p_employee_number, '')) = '' then
     return json_build_object('success', false, 'message', 'Full name and Number / ID cannot be empty.');
   end if;
 
@@ -122,7 +122,7 @@ begin
     return json_build_object('success', false, 'message', 'Username is already taken.');
   end if;
 
-  if exists (select 1 from public.profiles where employee_code = trim(p_employee_code)) then
+  if exists (select 1 from public.profiles where employee_number = trim(p_employee_number)) then
     return json_build_object('success', false, 'message', 'Employee ID / Number is already taken.');
   end if;
 
@@ -161,7 +161,7 @@ begin
   insert into public.profiles (
     id,
     full_name,
-    employee_code,
+    employee_number,
     username,
     role,
     department,
@@ -171,7 +171,7 @@ begin
   ) values (
     v_new_id,
     trim(p_full_name),
-    trim(p_employee_code),
+    trim(p_employee_number),
     v_clean_username,
     v_clean_role,
     nullif(trim(p_department), ''),

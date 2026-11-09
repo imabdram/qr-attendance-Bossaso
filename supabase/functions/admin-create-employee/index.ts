@@ -11,7 +11,7 @@ Deno.serve(async (req) => {
     const auth = req.headers.get('Authorization');
     if (!auth) return json({ message: 'Authentication required.' }, 401);
     const body = await req.json();
-    const { full_name, employee_code, username, password, department, shift, role } = body;
+    const { full_name, employee_number, username, password, department, shift, role } = body;
     const cleanUsername = String(username || '').trim().toLowerCase();
     const email = cleanUsername + '@attendance-login.example.com';
     const cleanShift = shift === 'afternoon' ? 'afternoon' : 'morning';
@@ -19,7 +19,7 @@ Deno.serve(async (req) => {
 
     if (
       !full_name ||
-      !employee_code ||
+      !employee_number ||
       !cleanUsername ||
       !/^[a-z0-9._-]{3,32}$/.test(cleanUsername) ||
       !password ||
@@ -61,7 +61,7 @@ Deno.serve(async (req) => {
     const { error: profileErr } = await db.from('profiles').insert({
       id: created.user.id,
       full_name,
-      employee_code,
+      employee_number,
       username: cleanUsername,
       role: cleanRole,
       department: department || null,

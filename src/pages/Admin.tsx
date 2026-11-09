@@ -75,7 +75,7 @@ function Dashboard() {
       // Query profiles without explicit shift column in the joined select to prevent PostgREST column missing crashes
       const { data: a, error: aErr } = await supabase
         .from('attendance')
-        .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department)')
+        .select('*, profiles!attendance_employee_id_fkey(full_name,employee_number,department)')
         .eq('work_date', todayLocal())
         .order('time_in');
 
@@ -341,7 +341,7 @@ function AttendanceTable({ rows }: { rows: Attendance[] }) {
                   <td>
                     <strong>{r.profiles?.full_name || 'Employee'}</strong>
                   </td>
-                  <td>{r.profiles?.employee_code || '—'}</td>
+                  <td>{r.profiles?.employee_number || '—'}</td>
                   <td>
                     <span className={`shift-badge ${shift}`}>
                       {shift === 'afternoon' ? 'Afternoon' : 'Morning'}
@@ -422,7 +422,7 @@ function Employees() {
     try {
       const data = await createEmployeeAccount({
         full_name: form.full_name,
-        employee_code: form.phone,
+        employee_number: form.phone,
         username: form.username,
         password: form.password,
         shift: form.shift,
@@ -454,7 +454,7 @@ function Employees() {
     try {
       const data = await adminUpdateEmployee(editEmp.id, {
         full_name: editForm.full_name,
-        employee_code: editForm.phone || editEmp.employee_code,
+        employee_number: editForm.phone || editEmp.employee_number,
         shift: editForm.shift,
       });
       setMsgType('success');
@@ -516,7 +516,7 @@ function Employees() {
   };
 
   const filtered = list.filter((x) => {
-    const matchQuery = (x.full_name + ' ' + x.employee_code + ' ' + (x.username || ''))
+    const matchQuery = (x.full_name + ' ' + x.employee_number + ' ' + (x.username || ''))
       .toLowerCase()
       .includes(q.toLowerCase());
     const matchRole = roleFilter === 'all' || x.role === roleFilter;
@@ -573,7 +573,7 @@ function Employees() {
             Phone Number
             <input
               required
-              placeholder="e.g. 0615123456"
+              placeholder="e.g. 071xxxxxxx"
               value={form.phone}
               onChange={(e) => setForm({ ...form, phone: e.target.value })}
             />
@@ -652,7 +652,7 @@ function Employees() {
                 <input
                   required
                   className="modal-input"
-                  placeholder="e.g. 0615123456"
+                  placeholder="e.g. 071xxxxxxx"
                   value={editForm.phone}
                   onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
                 />
@@ -825,7 +825,7 @@ function Employees() {
                       <td>
                         <strong>{p.full_name}</strong>
                       </td>
-                      <td>{p.employee_code}</td>
+                      <td>{p.employee_number}</td>
                       <td>{p.username}</td>
                       <td>
                         <span className={`shift-badge ${shift}`}>
@@ -853,7 +853,7 @@ function Employees() {
                               setEditEmp(p);
                               setEditForm({
                                 full_name: p.full_name,
-                                phone: p.employee_code,
+                                phone: p.employee_number,
                                 shift: p.shift || 'morning',
                               });
                             }}
@@ -1167,7 +1167,7 @@ function Reports() {
     setLoading(true);
     const { data, error } = await supabase
       .from('attendance')
-      .select('*, profiles!attendance_employee_id_fkey(full_name,employee_code,department)')
+      .select('*, profiles!attendance_employee_id_fkey(full_name,employee_number,department)')
       .gte('work_date', from)
       .lte('work_date', to)
       .order('work_date')
@@ -1196,7 +1196,7 @@ function Reports() {
         return [
           r.work_date,
           r.profiles?.full_name || '',
-          r.profiles?.employee_code || '',
+          r.profiles?.employee_number || '',
           r.profiles?.department || '',
           shift === 'afternoon' ? 'Afternoon' : 'Morning',
           timeLocal(r.time_in),

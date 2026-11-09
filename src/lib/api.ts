@@ -72,7 +72,7 @@ export async function recordAttendance(token: string): Promise<{
 
 export async function createEmployeeAccount(form: {
   full_name: string;
-  employee_code: string;
+  employee_number: string;
   username: string;
   password: string;
   role?: 'admin' | 'employee';
@@ -83,7 +83,7 @@ export async function createEmployeeAccount(form: {
   try {
     const { data: rpcData, error: rpcError } = await supabase.rpc('admin_create_user', {
       p_full_name: form.full_name,
-      p_employee_code: form.employee_code,
+      p_employee_number: form.employee_number,
       p_username: form.username,
       p_password: form.password,
       p_role: form.role || 'employee',
@@ -152,12 +152,12 @@ export async function adminResetPassword(
 
 export async function adminUpdateEmployee(
   employeeId: string,
-  form: { full_name: string; employee_code: string; department?: string; shift?: 'morning' | 'afternoon' }
+  form: { full_name: string; employee_number: string; department?: string; shift?: 'morning' | 'afternoon' }
 ): Promise<{ success: boolean; message: string }> {
   const { data, error } = await supabase.rpc('admin_update_employee', {
     p_employee_id: employeeId,
     p_full_name: form.full_name,
-    p_employee_code: form.employee_code,
+    p_employee_number: form.employee_number,
     p_department: form.department || null,
     p_shift: form.shift || 'morning',
   });

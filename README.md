@@ -25,7 +25,7 @@ A responsive Progressive Web App for employee **Time In only** using a rotating 
 4. Copy that user's UUID and run the following SQL, replacing the values:
 
 ```sql
-insert into public.profiles (id, full_name, employee_code, username, role, is_active)
+insert into public.profiles (id, full_name, employee_number, username, role, is_active)
 values ('ADMIN-AUTH-USER-UUID', 'System Administrator', 'ADMIN-001', 'admin@yourcompany.com', 'admin', true);
 ```
 

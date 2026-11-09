@@ -133,7 +133,7 @@ grant execute on function public.scan_attendance(text) to authenticated;
 create or replace function public.admin_update_employee(
   p_employee_id uuid,
   p_full_name text,
-  p_employee_code text,
+  p_employee_number text,
   p_department text,
   p_shift text default 'morning'
 )
@@ -151,12 +151,12 @@ begin
     return json_build_object('success', false, 'message', 'Unauthorized: Admin access required.');
   end if;
 
-  if trim(coalesce(p_full_name, '')) = '' or trim(coalesce(p_employee_code, '')) = '' then
+  if trim(coalesce(p_full_name, '')) = '' or trim(coalesce(p_employee_number, '')) = '' then
     return json_build_object('success', false, 'message', 'Full name and Employee ID cannot be empty.');
   end if;
 
-  -- Check if employee_code is taken by someone else
-  if exists (select 1 from public.profiles where employee_code = trim(p_employee_code) and id <> p_employee_id) then
+  -- Check if employee_number is taken by someone else
+  if exists (select 1 from public.profiles where employee_number = trim(p_employee_number) and id <> p_employee_id) then
     return json_build_object('success', false, 'message', 'Employee ID is already in use by another person.');
   end if;
 
@@ -164,7 +164,7 @@ begin
 
   update public.profiles
   set full_name = trim(p_full_name),
-      employee_code = trim(p_employee_code),
+      employee_number = trim(p_employee_number),
       department = nullif(trim(p_department), ''),
       shift = v_clean_shift
   where id = p_employee_id;
