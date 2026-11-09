@@ -113,7 +113,7 @@ export default function App() {
             <span className="brand-icon">
               <QrCode size={21} />
             </span>{' '}
-            Attendance Portal
+            Attendance Portal Bosaso
           </Link>
           <div className="top-actions">
             <span className="user-chip">

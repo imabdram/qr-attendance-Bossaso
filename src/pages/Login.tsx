@@ -61,7 +61,7 @@ export default function Login() {
         <div className="login-logo">
           <QrCode size={30} />
         </div>
-        <p className="eyebrow">EMPLOYEE MANAGEMENT</p>
+        <p className="eyebrow">ATTENDANCE PORTAL BOSASO</p>
         <h1>Welcome back</h1>
         <p className="muted">Sign in to record or manage attendance.</p>
         <label>

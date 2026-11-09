@@ -9,8 +9,8 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: [],
       manifest: {
-        name: 'Employee Attendance',
-        short_name: 'Attendance',
+        name: 'Attendance Portal Bosaso',
+        short_name: 'Attendance Bosaso',
         description: 'QR employee attendance system',
         theme_color: '#102a43',
         background_color: '#f4f7fb',
