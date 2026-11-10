@@ -94,6 +94,10 @@ an account.
 
 ## Backups
 
+Full runbook: [`BACKUP.md`](BACKUP.md). Short version: one snapshot per day via the
+Windows task **Bosaso DB Backup** (02:00, 14-day retention, log in
+`backups/backup.log`), plus `neon snapshots create` for manual backups.
+
 The database lives on Neon; backups are Neon snapshots (copy-on-write, so they cost
 only the storage of changed pages).
 
