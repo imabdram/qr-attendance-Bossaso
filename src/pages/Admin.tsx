@@ -1,14 +1,16 @@
 import { useEffect, useState, useRef } from 'react';
 import { Routes, Route, Link } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
+import { db } from '../lib/neon';
 import {
   generateQrToken,
+  revokeQrTokens,
   createEmployeeAccount,
   adminDeleteEmployee,
   adminResetPassword,
   adminUpdateEmployee,
 } from '../lib/api';
 import type { Attendance, Profile } from '../lib/types';
+import Notice from '../components/Notice';
 import { todayLocal, timeLocal, dateLabel, isFridayLocal } from '../lib/date';
 import {
   Users,
@@ -27,6 +29,7 @@ import {
   Pencil,
   Trash2,
   KeyRound,
+  ShieldCheck,
   X,
   Filter,
 } from 'lucide-react';
@@ -43,20 +46,22 @@ function Dashboard() {
   const [thresholdInput, setThresholdInput] = useState('09:00');
   const [savingThreshold, setSavingThreshold] = useState(false);
   const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'afternoon'>('all');
+  const [error, setError] = useState('');
+  const polling = useRef(false);
 
   const saveThreshold = async () => {
     if (!thresholdInput || !editingThreshold) return;
     setSavingThreshold(true);
     const key = editingThreshold === 'morning' ? 'late_after_morning' : 'late_after_afternoon';
-    const { error } = await supabase
+    const { error: saveError } = await db
       .from('app_settings')
       .upsert({
         setting_key: key,
         setting_value: thresholdInput,
         updated_at: new Date().toISOString(),
       });
-    if (error) {
-      alert(error.message);
+    if (saveError) {
+      setError(saveError.message);
     } else {
       if (editingThreshold === 'morning') {
         setMorningLateAt(thresholdInput);
@@ -69,32 +74,43 @@ function Dashboard() {
     setSavingThreshold(false);
   };
 
-  const load = async () => {
-    setLoading(true);
+  /** Today's arrivals only — this is what the 10s poll refreshes. */
+  const loadAttendance = async (silent = false) => {
+    if (polling.current) return;
+    polling.current = true;
+    if (!silent) setLoading(true);
     try {
-      // Query profiles without explicit shift column in the joined select to prevent PostgREST column missing crashes
-      const { data: a, error: aErr } = await supabase
+      const { data, error: queryError } = await db
         .from('attendance')
         .select('*, profiles!attendance_employee_id_fkey(full_name,employee_number,department)')
         .eq('work_date', todayLocal())
         .order('time_in');
 
-      if (aErr) {
-        console.error('Attendance query error:', aErr);
+      if (queryError) {
+        setError(queryError.message);
       } else {
-        setRows((a || []) as any);
+        setRows((data || []) as any);
       }
+    } catch (err) {
+      setError((err as Error).message || 'Could not load attendance.');
+    } finally {
+      polling.current = false;
+      if (!silent) setLoading(false);
+    }
+  };
 
-      const { data: p } = await supabase
+  /** Staff list and late thresholds change rarely; load them on demand. */
+  const loadReference = async () => {
+    try {
+      const { data: p, error: pError } = await db
         .from('profiles')
         .select('*')
         .eq('role', 'employee')
         .eq('is_active', true);
-      setStaff((p || []) as Profile[]);
+      if (pError) setError(pError.message);
+      else setStaff((p || []) as Profile[]);
 
-      const { data: s } = await supabase
-        .from('app_settings')
-        .select('setting_key,setting_value');
+      const { data: s } = await db.from('app_settings').select('setting_key,setting_value');
       if (s) {
         const morn = s.find((x) => x.setting_key === 'late_after_morning')?.setting_value;
         const legacy = s.find((x) => x.setting_key === 'late_after')?.setting_value;
@@ -104,20 +120,30 @@ function Dashboard() {
         if (aft) setAfternoonLateAt(aft);
       }
     } catch (err) {
-      console.error('Error loading attendance dashboard:', err);
-    } finally {
-      setLoading(false);
+      setError((err as Error).message || 'Could not load settings.');
     }
+  };
+
+  const load = async (silent = false) => {
+    if (!silent) setLoading(true);
+    await Promise.all([loadAttendance(true), loadReference()]);
+    setLoading(false);
   };
 
   useEffect(() => {
     load();
-    const ch = supabase
-      .channel('attendance-live')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'attendance' }, load)
-      .subscribe();
+    // Neon's Data API has no Realtime channel: refresh today's arrivals every 10s,
+    // but skip while the tab is in the background.
+    const interval = setInterval(() => {
+      if (!document.hidden) void loadAttendance(true);
+    }, 10000);
+    const onVisible = () => {
+      if (!document.hidden) void loadAttendance(true);
+    };
+    document.addEventListener('visibilitychange', onVisible);
     return () => {
-      supabase.removeChannel(ch);
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
     };
   }, []);
 
@@ -153,7 +179,7 @@ function Dashboard() {
               padding: '9px 12px',
               fontSize: '12px',
               background: '#fff',
-              color: '#334e68',
+              color: '#374151',
               fontWeight: 700,
             }}
           >
@@ -161,11 +187,16 @@ function Dashboard() {
             <option value="morning">Morning Shift</option>
             <option value="afternoon">Afternoon Shift</option>
           </select>
-          <button className="secondary" onClick={load}>
+          <button className="secondary" onClick={() => load()}>
             <RefreshCw size={16} /> Refresh
           </button>
         </div>
       </div>
+      {error && (
+        <Notice kind="error" onClose={() => setError('')}>
+          {error}
+        </Notice>
+      )}
       <div className="stats-grid">
         <Stat
           icon={<Users />}
@@ -189,7 +220,7 @@ function Dashboard() {
               {/* Morning Threshold */}
               {editingThreshold === 'morning' ? (
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  <span className="tiny" style={{ fontWeight: 700, color: '#1d4ed8' }}>Morning late:</span>
+                  <span className="tiny" style={{ fontWeight: 700, color: '#b91c1c' }}>Morning late:</span>
                   <input
                     type="time"
                     value={thresholdInput}
@@ -219,7 +250,7 @@ function Dashboard() {
                 </div>
               ) : (
                 <span className="muted" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                  <span>Morning late: <strong style={{ color: '#1d4ed8' }}>{morningLateAt}</strong></span>
+                  <span>Morning late: <strong style={{ color: '#b91c1c' }}>{morningLateAt}</strong></span>
                   <button
                     className="small-btn"
                     style={{ padding: '2px 7px', fontSize: '11px', cursor: 'pointer' }}
@@ -313,7 +344,27 @@ function Stat({
   );
 }
 
-function AttendanceTable({ rows }: { rows: Attendance[] }) {
+type ReportStatus = 'present' | 'late' | 'absent';
+
+/** A report row: a real attendance record, or a synthesized 'absent' entry. */
+type ReportRow = {
+  id: string;
+  employee_id: string;
+  work_date: string;
+  time_in: string | null;
+  status: ReportStatus;
+  shift?: 'morning' | 'afternoon';
+  profiles?: {
+    full_name?: string;
+    employee_number?: string;
+    department?: string | null;
+    shift?: string;
+  };
+};
+
+type AttendanceRow = Attendance | ReportRow;
+
+function AttendanceTable({ rows }: { rows: AttendanceRow[] }) {
   return (
     <div className="table-wrap">
       <table>
@@ -330,7 +381,7 @@ function AttendanceTable({ rows }: { rows: Attendance[] }) {
           {rows.length === 0 ? (
             <tr>
               <td colSpan={5} className="empty">
-                No attendance recorded yet today.
+                No records match the selected filters.
               </td>
             </tr>
           ) : (
@@ -347,10 +398,10 @@ function AttendanceTable({ rows }: { rows: Attendance[] }) {
                       {shift === 'afternoon' ? 'Afternoon' : 'Morning'}
                     </span>
                   </td>
-                  <td>{timeLocal(r.time_in)}</td>
+                  <td>{r.time_in ? timeLocal(r.time_in) : '—'}</td>
                   <td>
                     <span className={`status ${r.status}`}>
-                      {r.status === 'late' ? 'Late' : 'Present'}
+                      {r.status === 'absent' ? 'Absent' : r.status === 'late' ? 'Late' : 'Present'}
                     </span>
                   </td>
                 </tr>
@@ -370,7 +421,6 @@ function Employees() {
   const [msg, setMsg] = useState('');
   const [msgType, setMsgType] = useState<'success' | 'error'>('success');
   const [q, setQ] = useState('');
-  const [roleFilter, setRoleFilter] = useState<'all' | 'employee' | 'admin'>('all');
   const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'afternoon'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'inactive'>('all');
 
@@ -403,11 +453,16 @@ function Employees() {
   const [deleteEmp, setDeleteEmp] = useState<Profile | null>(null);
 
   const load = async () => {
-    const { data } = await supabase
+    const { data, error } = await db
       .from('profiles')
       .select('*')
       .eq('role', 'employee')
       .order('full_name');
+    if (error) {
+      setMsgType('error');
+      setMsg(error.message);
+      return;
+    }
     setList((data || []) as Profile[]);
   };
 
@@ -424,6 +479,7 @@ function Employees() {
         full_name: form.full_name,
         employee_number: form.phone,
         username: form.username,
+        role: 'employee',
         password: form.password,
         shift: form.shift,
       });
@@ -507,25 +563,30 @@ function Employees() {
   };
 
   const toggle = async (p: Profile) => {
-    const { error } = await supabase
+    const { error: toggleError } = await db
       .from('profiles')
       .update({ is_active: !p.is_active })
       .eq('id', p.id);
-    if (error) alert(error.message);
-    else load();
+    if (toggleError) {
+      setMsgType('error');
+      setMsg(toggleError.message);
+    } else {
+      setMsgType('success');
+      setMsg(`${p.full_name} is now ${p.is_active ? 'deactivated' : 'active'}.`);
+      await load();
+    }
   };
 
   const filtered = list.filter((x) => {
     const matchQuery = (x.full_name + ' ' + x.employee_number + ' ' + (x.username || ''))
       .toLowerCase()
       .includes(q.toLowerCase());
-    const matchRole = roleFilter === 'all' || x.role === roleFilter;
     const matchShift = shiftFilter === 'all' || (x.shift || 'morning') === shiftFilter;
     const matchStatus =
       statusFilter === 'all' ||
       (statusFilter === 'active' && x.is_active) ||
       (statusFilter === 'inactive' && !x.is_active);
-    return matchQuery && matchRole && matchShift && matchStatus;
+    return matchQuery && matchShift && matchStatus;
   });
 
   return (
@@ -590,7 +651,7 @@ function Employees() {
                 padding: '11px 12px',
                 outline: 'none',
                 background: 'white',
-                color: '#193651',
+                color: '#111827',
               }}
             >
               <option value="morning">Morning Shift (Late after 09:00)</option>
@@ -608,6 +669,10 @@ function Employees() {
               onChange={(e) => setForm({ ...form, password: e.target.value })}
             />
           </label>
+
+          <p className="muted tiny span-2" style={{ margin: 0 }}>
+            Employees sign in with their <strong>username</strong> and the temporary password above.
+          </p>
 
           <div className="span-2" style={{ display: 'flex', gap: '10px', marginTop: '10px' }}>
             <button className="primary" disabled={busy}>
@@ -752,7 +817,7 @@ function Employees() {
       {/* Employee List Section */}
       <section className="panel">
         <div className="panel-head" style={{ flexWrap: 'wrap', gap: '12px' }}>
-          <h2>Employee Directory ({filtered.length})</h2>
+          <h2>Employees ({filtered.length})</h2>
           <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <div className="searchbox">
               <Search size={16} />
@@ -766,12 +831,12 @@ function Employees() {
               value={shiftFilter}
               onChange={(e) => setShiftFilter(e.target.value as any)}
               style={{
-                border: '1px solid #e5ebf1',
+                border: '1px solid #e5e7eb',
                 borderRadius: '8px',
                 padding: '7px 10px',
                 fontSize: '12px',
-                background: '#f5f8fb',
-                color: '#476078',
+                background: '#ffffff',
+                color: '#374151',
                 fontWeight: 600,
               }}
             >
@@ -783,12 +848,12 @@ function Employees() {
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value as any)}
               style={{
-                border: '1px solid #e5ebf1',
+                border: '1px solid #e5e7eb',
                 borderRadius: '8px',
                 padding: '7px 10px',
                 fontSize: '12px',
-                background: '#f5f8fb',
-                color: '#476078',
+                background: '#ffffff',
+                color: '#374151',
                 fontWeight: 600,
               }}
             >
@@ -839,13 +904,15 @@ function Employees() {
                       </td>
                       <td>
                         <div className="actions-cell">
-                          <button
-                            className="small-btn"
-                            onClick={() => toggle(p)}
-                            title={p.is_active ? 'Deactivate Account' : 'Activate Account'}
-                          >
-                            {p.is_active ? 'Deactivate' : 'Activate'}
-                          </button>
+                          {p.role !== 'admin' && (
+                            <button
+                              className="small-btn"
+                              onClick={() => toggle(p)}
+                              title={p.is_active ? 'Deactivate Account' : 'Activate Account'}
+                            >
+                              {p.is_active ? 'Deactivate' : 'Activate'}
+                            </button>
+                          )}
                           <button
                             className="icon-action-btn"
                             title="Edit Profile & Shift"
@@ -870,13 +937,15 @@ function Employees() {
                           >
                             <KeyRound size={14} />
                           </button>
-                          <button
-                            className="icon-action-btn delete"
-                            title="Delete Account"
-                            onClick={() => setDeleteEmp(p)}
-                          >
-                            <Trash2 size={14} />
-                          </button>
+                          {p.role !== 'admin' && (
+                            <button
+                              className="icon-action-btn delete"
+                              title="Delete Account"
+                              onClick={() => setDeleteEmp(p)}
+                            >
+                              <Trash2 size={14} />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -908,6 +977,8 @@ function QrDisplay() {
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(intervalSec);
+  const [revoking, setRevoking] = useState(false);
+  const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
   const modeRef = useRef(mode);
   modeRef.current = mode;
@@ -936,7 +1007,7 @@ function QrDisplay() {
       // Auto: interval + 25 seconds
       const durationSeconds =
         modeRef.current === 'fixed'
-          ? 31536000
+          ? 86400
           : modeRef.current === 'manual'
           ? 86400
           : intervalRef.current + 25;
@@ -982,18 +1053,56 @@ function QrDisplay() {
     window.print();
   };
 
+  const revokeAll = async () => {
+    const ok = window.confirm(
+      'Revoke every active QR code?\n\nAnyone scanning the current code will be refused until you generate a new one.'
+    );
+    if (!ok) return;
+    setRevoking(true);
+    try {
+      const res = await revokeQrTokens();
+      setNotice({ kind: 'success', text: res.message || 'QR codes revoked.' });
+      await refresh();
+    } catch (e: any) {
+      setNotice({ kind: 'error', text: e.message || 'Could not revoke QR codes.' });
+    } finally {
+      setRevoking(false);
+    }
+  };
+
+  const expiresLabel = expires
+    ? new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Africa/Mogadishu',
+        day: '2-digit',
+        month: 'short',
+        hour: '2-digit',
+        minute: '2-digit',
+      }).format(new Date(expires))
+    : '';
+
   return (
     <div className="qr-page">
       <div className="page-head">
         <div>
-          <p className="eyebrow">OFFICE CHECK-IN</p>
-          <h1>Office QR Display</h1>
+          <p className="eyebrow">BOSASO OFFICE CHECK-IN</p>
+          <h1>Bosaso QR Display</h1>
           <p className="muted">Configure rotation behavior and display or print your QR code.</p>
         </div>
-        <button className="secondary" onClick={refresh} disabled={loading}>
-          <RefreshCw size={16} /> {loading ? 'Refreshing…' : 'Regenerate QR'}
-        </button>
+        <div className="page-head-actions">
+          <button className="secondary" onClick={revokeAll} disabled={revoking || loading}>
+            <ShieldCheck size={16} /> {revoking ? 'Revoking…' : 'Revoke QR Codes'}
+          </button>
+          <button className="secondary" onClick={refresh} disabled={loading}>
+            <RefreshCw size={16} /> {loading ? 'Refreshing…' : 'Regenerate QR'}
+          </button>
+        </div>
       </div>
+
+      {notice && (
+        <div className={`alert ${notice.kind}`} role="status" aria-live="polite">
+          {notice.text}
+        </div>
+      )}
 
       {/* Mode Controls */}
       <div className="qr-config-panel">
@@ -1020,7 +1129,7 @@ function QrDisplay() {
             className={`qr-mode-tab ${mode === 'fixed' ? 'active' : ''}`}
             onClick={() => handleModeChange('fixed')}
           >
-            <Pin size={15} /> Fixed (Permanent)
+            <Pin size={15} /> 24-Hour QR
           </button>
         </div>
 
@@ -1073,7 +1182,8 @@ function QrDisplay() {
         {mode === 'fixed' && (
           <div style={{ textAlign: 'center' }}>
             <p className="tiny muted">
-              This QR code is <strong>permanent</strong> (valid for 1 year). Perfect for printing and framing on a wall or reception desk.
+              Valid for <strong>24 hours</strong> — print it for the day and reprint the poster
+              tomorrow. Older codes stop working automatically.
             </p>
             <div className="qr-action-row">
               <button className="primary" onClick={printQR}>
@@ -1085,26 +1195,30 @@ function QrDisplay() {
       </div>
 
       {/* Printable Heading for printouts */}
-      <h1 className="print-only-title">Office Attendance Check-In</h1>
-      <p className="print-only-sub">Scan this QR code with your phone camera to record Time In.</p>
+      <h1 className="print-only-title">Bosaso Office Attendance Check-In</h1>
+      <p className="print-only-sub">Bosaso Branch · Scan this QR code with your phone camera to record Time In.</p>
+      <p className="print-only-expiry">
+        Valid until <strong>{expiresLabel || '—'}</strong> · Ask the administrator for a fresh poster
+        after this time.
+      </p>
 
       {/* Main QR Display Card */}
       <section className="qr-display-card">
         <div
           className="live-label"
           style={{
-            background: mode === 'fixed' ? '#eaf3fb' : mode === 'manual' ? '#fff4df' : '#e8f8ef',
-            color: mode === 'fixed' ? '#176aa8' : mode === 'manual' ? '#b7791f' : '#18784a',
+            background: mode === 'fixed' ? '#fef2f2' : mode === 'manual' ? '#fff4df' : '#fef2f2',
+            color: mode === 'fixed' ? '#b91c1c' : mode === 'manual' ? '#b7791f' : '#b91c1c',
           }}
         >
           <span
-            className="live-dot"
+            className={'live-dot' + (mode === 'auto' ? ' pulsing' : '')}
             style={{
-              background: mode === 'fixed' ? '#176aa8' : mode === 'manual' ? '#b7791f' : '#20a35b',
+              background: mode === 'fixed' ? '#b91c1c' : mode === 'manual' ? '#b7791f' : '#dc2626',
             }}
           />{' '}
           {mode === 'fixed'
-            ? 'PERMANENT FIXED QR'
+            ? '24-HOUR QR'
             : mode === 'manual'
             ? 'STATIC (CHANGE ON DEMAND)'
             : 'LIVE ROTATING QR'}
@@ -1118,22 +1232,17 @@ function QrDisplay() {
             <h2>Scan to record Time In</h2>
             <p className="muted">
               {mode === 'fixed'
-                ? 'Permanent QR code. Employees can scan anytime.'
+                ? 'Valid for 24 hours. Employees can scan it until it expires.'
                 : mode === 'manual'
                 ? 'Only updates when an administrator refreshes it.'
                 : `Automatically changes every ${intervalSec} seconds.`}
             </p>
 
             <div className="expiry">
-              {mode === 'fixed' ? (
+              {mode === 'fixed' || mode === 'manual' ? (
                 <>
                   <Pin size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />
-                  <strong>Fixed permanent QR</strong>
-                </>
-              ) : mode === 'manual' ? (
-                <>
-                  <Hand size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />
-                  <strong>Changes when you say</strong>
+                  Expires <strong>{expiresLabel}</strong>
                 </>
               ) : (
                 <>
@@ -1143,7 +1252,7 @@ function QrDisplay() {
             </div>
           </>
         ) : (
-          <p style={{ margin: '30px 0', color: err ? '#c34b4b' : '#62768b', lineHeight: '1.5' }}>
+          <p style={{ margin: '30px 0', color: err ? '#c34b4b' : '#6b7280', lineHeight: '1.5' }}>
             {loading ? 'Generating secure QR…' : err}
           </p>
         )}
@@ -1157,26 +1266,53 @@ function QrDisplay() {
 }
 
 function Reports() {
+  const PAGE = 500;
   const [from, setFrom] = useState(todayLocal());
   const [to, setTo] = useState(todayLocal());
   const [shiftFilter, setShiftFilter] = useState<'all' | 'morning' | 'afternoon'>('all');
-  const [rows, setRows] = useState<Attendance[]>([]);
+  const [statusFilter, setStatusFilter] = useState<'all' | ReportStatus>('all');
+  const [rows, setRows] = useState<ReportRow[]>([]);
+  const [limit, setLimit] = useState(PAGE);
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
 
   const load = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('attendance')
-      .select('*, profiles!attendance_employee_id_fkey(full_name,employee_number,department)')
-      .gte('work_date', from)
-      .lte('work_date', to)
-      .order('work_date')
-      .order('time_in');
-
-    if (error) {
-      console.error('Reports load error:', error);
+    if (from > to) {
+      setError('The start date is after the end date.');
+      return;
     }
-    setRows((data || []) as any);
+    setError('');
+    setLoading(true);
+
+    // Server-side grid: every employee × every working day, with 'absent'
+    // synthesized where no attendance row exists.
+    const { data, error: queryError } = await db.rpc('attendance_report', {
+      p_from: from,
+      p_to: to,
+    });
+
+    if (queryError) {
+      setError(queryError.message);
+      setRows([]);
+    } else {
+      setRows(
+        ((data || []) as any[]).map((r) => ({
+          id: `${r.work_date}-${r.employee_id}`,
+          employee_id: r.employee_id,
+          work_date: r.work_date,
+          time_in: r.time_in ?? null,
+          status: r.status as ReportStatus,
+          shift: r.shift,
+          profiles: {
+            full_name: r.full_name,
+            employee_number: r.employee_number,
+            department: r.department,
+            shift: r.shift,
+          },
+        }))
+      );
+      setLimit(PAGE);
+    }
     setLoading(false);
   };
 
@@ -1184,9 +1320,15 @@ function Reports() {
     load();
   }, []);
 
-  const filteredRows = shiftFilter === 'all'
-    ? rows
-    : rows.filter((r) => (r.shift || r.profiles?.shift || 'morning') === shiftFilter);
+  const filteredRows = rows.filter((r) => {
+    const shift = r.shift || r.profiles?.shift || 'morning';
+    const shiftOk = shiftFilter === 'all' || shift === shiftFilter;
+    const statusOk = statusFilter === 'all' || r.status === statusFilter;
+    return shiftOk && statusOk;
+  });
+
+  const visibleRows = filteredRows.slice(0, limit);
+  const hasMore = filteredRows.length > limit;
 
   const csv = () => {
     const lines = [
@@ -1199,8 +1341,8 @@ function Reports() {
           r.profiles?.employee_number || '',
           r.profiles?.department || '',
           shift === 'afternoon' ? 'Afternoon' : 'Morning',
-          timeLocal(r.time_in),
-          r.status,
+          r.time_in ? timeLocal(r.time_in) : '',
+          r.status === 'absent' ? 'Absent' : r.status === 'late' ? 'Late' : 'Present',
         ];
       }),
     ];
@@ -1242,6 +1384,26 @@ function Reports() {
             <input type="date" value={to} onChange={(e) => setTo(e.target.value)} />
           </label>
           <label>
+            Status
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as any)}
+              style={{
+                border: '1px solid #dce5ee',
+                borderRadius: '8px',
+                padding: '11px 12px',
+                outline: 'none',
+                background: 'white',
+                color: '#111827',
+              }}
+            >
+              <option value="all">All statuses</option>
+              <option value="present">Present</option>
+              <option value="late">Late</option>
+              <option value="absent">Absent</option>
+            </select>
+          </label>
+          <label>
             Shift
             <select
               value={shiftFilter}
@@ -1252,7 +1414,7 @@ function Reports() {
                 padding: '11px 12px',
                 outline: 'none',
                 background: 'white',
-                color: '#193651',
+                color: '#111827',
               }}
             >
               <option value="all">All Shifts</option>
@@ -1260,17 +1422,40 @@ function Reports() {
               <option value="afternoon">Afternoon Shift</option>
             </select>
           </label>
-          <button className="secondary" onClick={load}>
+          <button className="secondary" onClick={() => load()}>
             <RefreshCw size={16} /> Apply filter
           </button>
         </div>
+        {error && (
+          <Notice kind="error" onClose={() => setError('')}>
+            {error}
+          </Notice>
+        )}
         <div className="panel-head">
-          <h2>{filteredRows.length} attendance records</h2>
+          <h2>
+            {filteredRows.length}
+            {hasMore ? '+' : ''} attendance records
+          </h2>
           <span className="muted">
             {from} — {to}
           </span>
         </div>
-        {loading ? <p className="muted">Loading…</p> : <AttendanceTable rows={filteredRows} />}
+        {loading ? (
+          <p className="muted">Loading…</p>
+        ) : (
+          <>
+            <AttendanceTable rows={visibleRows} />
+            {hasMore && (
+              <button
+                className="secondary"
+                style={{ marginTop: '14px' }}
+                onClick={() => setLimit(limit + PAGE)}
+              >
+                Load {PAGE} more records
+              </button>
+            )}
+          </>
+        )}
       </section>
     </>
   );

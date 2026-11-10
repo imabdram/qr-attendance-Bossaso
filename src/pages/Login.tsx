@@ -1,68 +1,88 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { supabase } from '../lib/supabase';
-import { QrCode, LockKeyhole } from 'lucide-react';
+import { useRef, useState } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { loadProfile, signIn, signOut } from '../lib/neon';
+import type { Profile } from '../lib/types';
+import { LockKeyhole } from 'lucide-react';
 
 export default function Login() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState('');
+  const [slow, setSlow] = useState(false);
+  const [params] = useSearchParams();
+  const [error, setError] = useState(
+    params.get('expired') ? 'Your session expired. Please sign in again.' : ''
+  );
+  const slowTimer = useRef<number | null>(null);
   const nav = useNavigate();
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     setBusy(true);
+    setSlow(false);
     setError('');
+    if (slowTimer.current) window.clearTimeout(slowTimer.current);
+    slowTimer.current = window.setTimeout(() => setSlow(true), 8000);
+
     const loginValue = email.trim().toLowerCase();
     const loginEmail = loginValue.includes('@')
       ? loginValue
       : `${loginValue}@attendance-login.example.com`;
 
-    const { data, error: authErr } = await supabase.auth.signInWithPassword({
-      email: loginEmail,
-      password,
-    });
+    try {
+      const { user, error: authErr } = await signIn(loginEmail, password);
 
-    if (authErr || !data.user) {
-      setError('Incorrect username/email or password.');
+      if (authErr || !user) {
+        const isNetworkIssue = authErr && /timed out|failed to fetch|network/i.test(authErr);
+        setError(
+          isNetworkIssue
+            ? authErr
+            : 'Incorrect username/email or password.'
+        );
+        return;
+      }
+
+      let p: Profile | null = null;
+      try {
+        p = (await loadProfile(user.id)) as Profile | null;
+      } catch (err) {
+        setError(
+          `Signed in, but your profile did not load (${(err as Error).message}). ` +
+            'Check your connection and try again.'
+        );
+        return;
+      }
+
+      if (!p) {
+        setError(
+          'User authenticated, but no profile was found in the database. Please ensure your admin profile row exists in public.profiles table.'
+        );
+        await signOut();
+        return;
+      }
+
+      if (!p.is_active) {
+        setError('This account has been deactivated. Please contact an administrator.');
+        await signOut();
+        return;
+      }
+
+      nav(p.role === 'admin' ? '/admin' : '/employee');
+    } finally {
+      if (slowTimer.current) window.clearTimeout(slowTimer.current);
+      setSlow(false);
       setBusy(false);
-      return;
     }
-
-    const { data: p, error: pErr } = await supabase
-      .from('profiles')
-      .select('role, is_active')
-      .eq('id', data.user.id)
-      .maybeSingle();
-
-    if (pErr || !p) {
-      setError(
-        'User authenticated, but no profile was found in the database. Please ensure your admin profile row exists in public.profiles table.'
-      );
-      setBusy(false);
-      return;
-    }
-
-    if (!p.is_active) {
-      setError('This account has been deactivated. Please contact an administrator.');
-      await supabase.auth.signOut();
-      setBusy(false);
-      return;
-    }
-
-    nav(p.role === 'admin' ? '/admin' : '/employee');
-    setBusy(false);
   };
 
   return (
     <main className="login-wrap">
       <form className="login-card" onSubmit={submit}>
-        <div className="login-logo">
-          <QrCode size={30} />
-        </div>
-        <p className="eyebrow">ATTENDANCE PORTAL BOSASO</p>
-        <h1>Welcome back</h1>
+        <h1>
+          Attendance Portal
+          <span className="login-branch">Bosaso branch</span>
+        </h1>
         <p className="muted">Sign in to record or manage attendance.</p>
         <label>
           Username or admin email
@@ -88,13 +108,22 @@ export default function Login() {
         {error && <div className="alert error">{error}</div>}
         <button className="primary full" disabled={busy}>
           {busy ? (
-            'Signing in…'
+            slow ? (
+              'Still signing in…'
+            ) : (
+              'Signing in…'
+            )
           ) : (
             <>
               <LockKeyhole size={17} /> Sign in
             </>
           )}
         </button>
+        {busy && slow && (
+          <p className="tiny muted center">
+            The first sign-in of the day can take a few seconds while the database wakes up.
+          </p>
+        )}
         <p className="tiny muted center">Your account must be created by the system administrator.</p>
       </form>
     </main>

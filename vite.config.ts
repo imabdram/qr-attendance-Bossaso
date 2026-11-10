@@ -3,17 +3,22 @@ import react from '@vitejs/plugin-react';
 import { VitePWA } from 'vite-plugin-pwa';
 
 export default defineConfig({
+  server: {
+    watch: {
+      ignored: ['**/.tmp/**', '**/dist/**', '**/*.tmpdir/**', '**/.*.tmpdir/**'],
+    },
+  },
   plugins: [
     react(),
     VitePWA({
       registerType: 'autoUpdate',
       includeAssets: [],
       manifest: {
-        name: 'Attendance Portal Bosaso',
-        short_name: 'Attendance Bosaso',
-        description: 'QR employee attendance system',
-        theme_color: '#102a43',
-        background_color: '#f4f7fb',
+        name: 'Bosaso Attendance Portal',
+        short_name: 'Bosaso QR',
+        description: 'Bosaso Branch QR employee attendance',
+        theme_color: '#160709',
+        background_color: '#fdf6f6',
         display: 'standalone',
         start_url: '/',
         icons: [
