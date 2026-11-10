@@ -479,7 +479,6 @@ function Employees() {
         full_name: form.full_name,
         employee_number: form.phone,
         username: form.username,
-        role: 'employee',
         password: form.password,
         shift: form.shift,
       });

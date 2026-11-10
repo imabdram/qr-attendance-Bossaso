@@ -53,13 +53,17 @@ export async function recordAttendance(token: string): Promise<{
   return rpcData;
 }
 
+/**
+ * Creates an EMPLOYEE account. The frontend deliberately cannot create
+ * administrators: the role is hard-coded here, and the database function
+ * `admin_create_user` rejects `p_role = 'admin'` as well, so a tampered
+ * request cannot escalate either.
+ */
 export async function createEmployeeAccount(form: {
   full_name: string;
   employee_number: string;
   username: string;
   password: string;
-  email?: string;
-  role?: 'admin' | 'employee';
   shift?: 'morning' | 'afternoon';
   department?: string;
 }): Promise<{ success: boolean; message: string; id?: string }> {
@@ -70,10 +74,10 @@ export async function createEmployeeAccount(form: {
     p_employee_number: form.employee_number,
     p_username: form.username,
     p_password_hash: passwordHash,
-    p_role: form.role || 'employee',
+    p_role: 'employee',
     p_shift: form.shift || 'morning',
     p_department: form.department || null,
-    p_email: form.email?.trim() || null,
+    p_email: null,
   });
 
   if (rpcError) {

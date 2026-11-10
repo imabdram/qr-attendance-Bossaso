@@ -340,7 +340,7 @@ These are the non-obvious parts. Break one and you get a spinner or a 401.
 | `revoke_qr_tokens()` | Admin-only; deletes all unexpired tokens |
 | `attendance_report(p_from date, p_to date)` | Admin-only; every employee × working day, `status = 'absent'` when nothing was recorded |
 | `scan_attendance(p_token text)` | Employee-only; validates hash + expiry, Friday block, late/on-time, one row per day |
-| `admin_create_user(full_name, employee_number, username, password_hash, role, shift, department, email)` | Creates `neon_auth.user` + credential account + profile |
+| `admin_create_user(full_name, employee_number, username, password_hash, shift, department)` | Creates an **employee** (`neon_auth.user` + credential + profile). Rejects `role='admin'`; admins are made by `scripts/add-admin.mjs` or SQL only |
 | `admin_update_employee(id, full_name, employee_number, department, shift)` | Edits profile + auth name |
 | `admin_reset_password(id, password_hash)` | Replaces credential hash, drops sessions |
 | `admin_delete_employee(id)` | Deletes attendance, profile, account, sessions, user (refuses admins) |

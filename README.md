@@ -150,29 +150,62 @@ logins are covered as well as attendance.
 
 ## Accounts
 
-- Admins sign in with their real email or with a username (e.g. `admin@attendance-login.example.com`).
+- Admins sign in with their real email (or `admin` for the bootstrap account).
 - Employees sign in with a **username**; the app appends
   `@attendance-login.example.com` before calling Neon Auth.
-- New accounts are created from **Employees → Add Employee**: pick *Account type*
-  (Employee or Administrator), and for an administrator enter the **email** they
-  will sign in with.
-- The account list shows both roles; use *Reset password* (key icon) to set a new
-  password for anyone, including another admin.
-- The first admin must exist in the database already.
+- **The web app can only create employees.** Employees → *Add Employee* has no
+  admin option, `createEmployeeAccount` hard-codes `p_role: 'employee'`, and the
+  database rejects `admin_create_user(p_role => 'admin')` plus any profile role
+  change coming from PostgREST.
+- Administrators are created **server-side only**: `scripts/add-admin.mjs`, the
+  Neon SQL Editor, or the Neon platform. The Employees list therefore shows
+  employees only.
+- Use *Reset password* (key icon) to set a new password for an employee; admins
+  are reset with `scripts/reset-password.mjs`.
 
-### Adding an admin from the command line
+### Adding an admin (server-side only)
 
 ```bash
 node scripts/add-admin.mjs dhomdesign@gmail.com 'SomeStrongPassword!' "Dhom Design"
 ```
 
 Re-running the same command with the same email **changes that admin's password**.
-It signs in as an existing admin using `ADMIN_EMAIL` / `ADMIN_PASSWORD`, which must
-be present in the shell or in the git-ignored `.env.local` (never in code):
+It writes straight to the database with `DATABASE_URL_UNPOOLED`, so no admin
+session or `ADMIN_EMAIL` / `ADMIN_PASSWORD` is needed:
 
 ```env
-ADMIN_EMAIL=you@example.com
-ADMIN_PASSWORD=…
+DATABASE_URL_UNPOOLED=postgresql://…
+```
+
+### Forgotten password (break-glass)
+
+The Reset password screen needs an existing admin session, and the shared SMTP
+cannot deliver to `@attendance-login.example.com`, so a locked-out admin is
+recovered from the database instead:
+
+```bash
+node scripts/reset-password.mjs admin@attendance-login.example.com 'NewStrongPassword!'
+node scripts/reset-password.mjs yacquub 'AnotherStrongPassword!'   # username also works
+```
+
+It writes the scrypt hash Better Auth expects straight into
+`neon_auth.account` and deletes that user's sessions — no login required, only
+`DATABASE_URL_UNPOOLED` from `.env.local` (or any machine holding the connection
+string). Use it for employees too.
+
+In the Neon SQL Editor the same thing needs a hash generated outside Postgres
+(`crypt()` is bcrypt, which Better Auth rejects):
+
+```bash
+node -e "const {scryptSync,randomBytes}=require('node:crypto');const p=process.argv[1];const s=randomBytes(16).toString('hex');console.log(s+':'+scryptSync(p.normalize('NFKC'),s,64,{N:16384,r:16,p:1,maxmem:128*16384*16*2}).toString('hex'))" 'NewStrongPassword!'
+```
+
+```sql
+update neon_auth.account set password = '<paste-hash>', "updatedAt" = now()
+ where "providerId" = 'credential'
+   and "userId" = (select id from neon_auth.user where email = 'admin@attendance-login.example.com');
+delete from neon_auth.session
+ where "userId" = (select id from neon_auth.user where email = 'admin@attendance-login.example.com');
 ```
 
 ### QR code lifetime

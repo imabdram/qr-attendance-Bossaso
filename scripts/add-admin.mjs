@@ -7,13 +7,25 @@
  *   node scripts/add-admin.mjs name@example.com 'A-Strong-Password' "Full Name"
  *
  * Running it again with the same email sets a new password.
- * Needs ADMIN_EMAIL / ADMIN_PASSWORD of an existing administrator
- * (set them in the shell or in the git-ignored .env.local).
+ *
+ * This writes directly to the database with DATABASE_URL_UNPOOLED. The web app
+ * intentionally cannot create administrators: `admin_create_user` rejects
+ * `p_role = 'admin'`, and a trigger blocks role changes from PostgREST.
  */
 import { scryptSync, randomBytes } from 'node:crypto';
-import { createClient } from '@supabase/supabase-js';
-import { loadEnvLocal, adminCredentials } from './lib/admin.mjs';
+import { readFileSync } from 'node:fs';
+import { Pool } from '@neondatabase/serverless';
 
+function loadEnvLocal() {
+  const text = readFileSync(new URL('../.env.local', import.meta.url), 'utf8');
+  for (const line of text.split(/\r?\n/)) {
+    const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
+    if (!m) continue;
+    let v = m[2];
+    if (v.startsWith('"') && v.endsWith('"')) v = v.slice(1, -1);
+    process.env[m[1]] ??= v;
+  }
+}
 loadEnvLocal();
 
 const [email, password, fullName, usernameArg] = process.argv.slice(2);
@@ -31,78 +43,86 @@ const username = (usernameArg || local).toLowerCase();
 const name = fullName || local;
 const phone = 'ADMIN-' + username.toUpperCase();
 
-const hashPassword = (pw) => {
+/** Better Auth scrypt format: <32 hex salt>:<128 hex key>. */
+function hashPassword(pw) {
   const salt = randomBytes(16).toString('hex');
-  return `${salt}:${scryptSync(pw, salt, 64, { N: 16384, r: 16, p: 1, maxmem: 128 * 16384 * 16 * 2 }).toString('hex')}`;
-};
-
-const AUTH = process.env.VITE_NEON_AUTH_URL.replace(/\/$/, '');
-const API = process.env.VITE_NEON_DATA_API_URL.replace(/\/rest\/v1\/?$/, '');
-const ORIGIN = process.env.APP_ORIGIN || 'http://localhost:5173';
-
-async function signIn(e, p) {
-  const res = await fetch(`${AUTH}/sign-in/email`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Origin: ORIGIN },
-    body: JSON.stringify({ email: e, password: p }),
-  });
-  if (!res.ok) throw new Error(`Admin sign-in failed (${res.status})`);
-  const cookie = res.headers.getSetCookie()[0].split(';')[0];
-  const { token } = await (await fetch(`${AUTH}/token`, { headers: { Origin: ORIGIN, Cookie: cookie } })).json();
-  return createClient(API, 'neon-data-api', {
-    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
-    accessToken: async () => token,
-  });
+  const key = scryptSync(pw.normalize('NFKC'), salt, 64, {
+    N: 16384,
+    r: 16,
+    p: 1,
+    maxmem: 128 * 16384 * 16 * 2,
+  }).toString('hex');
+  return `${salt}:${key}`;
 }
 
-const ADMIN = adminCredentials();
-const admin = await signIn(ADMIN.email, ADMIN.password);
+const hash = hashPassword(password);
+const pool = new Pool({ connectionString: process.env.DATABASE_URL_UNPOOLED });
+const client = await pool.connect();
 
-const created = await admin.rpc('admin_create_user', {
-  p_full_name: name,
-  p_employee_number: phone,
-  p_username: username,
-  p_password_hash: hashPassword(password),
-  p_role: 'admin',
-  p_shift: 'morning',
-  p_department: 'Management',
-  p_email: email,
-});
+try {
+  await client.query('begin');
 
-if (created.error) {
-  console.error('Failed:', created.error.message);
-  process.exit(1);
+  const existing = await client.query(
+    'select id from neon_auth.user where lower(email) = lower($1)',
+    [email]
+  );
+
+  let userId;
+  if (existing.rowCount > 0) {
+    userId = existing.rows[0].id;
+    await client.query('update neon_auth.user set name = $2, "updatedAt" = now() where id = $1', [
+      userId,
+      name,
+    ]);
+    console.log(`Account ${email} already existed — updating it.`);
+  } else {
+    const inserted = await client.query(
+      `insert into neon_auth.user (id, name, email, "emailVerified", role, banned, "createdAt", "updatedAt")
+       values (gen_random_uuid(), $1, $2, true, 'user', false, now(), now())
+       returning id`,
+      [name, email]
+    );
+    userId = inserted.rows[0].id;
+  }
+
+  const updated = await client.query(
+    `update neon_auth.account
+        set password = $1, "updatedAt" = now()
+      where "userId" = $2 and "providerId" = 'credential'`,
+    [hash, userId]
+  );
+  if (updated.rowCount === 0) {
+    await client.query(
+      `insert into neon_auth.account (id, "accountId", "providerId", "userId", password, "createdAt", "updatedAt")
+       values (gen_random_uuid(), $1::text, 'credential', $2::uuid, $3, now(), now())`,
+      [userId, userId, hash]
+    );
+  }
+
+  await client.query(
+    `insert into public.profiles (id, full_name, employee_number, username, role, department, shift, is_active)
+     values ($1, $2, $3, $4, 'admin', 'Management', 'morning', true)
+     on conflict (id) do update
+       set role = 'admin',
+           is_active = true,
+           full_name = excluded.full_name`,
+    [userId, name, phone, username]
+  );
+
+  await client.query('delete from neon_auth.session where "userId" = $1', [userId]);
+  await client.query('commit');
+
+  console.log(`Admin ready: ${email} (username ${username})`);
+  console.log('Password set. Sign in with the full email address.');
+} catch (err) {
+  await client.query('rollback');
+  if (err.code === '23505') {
+    console.error('Failed: that username or admin ID is already used by another profile.');
+  } else {
+    console.error('Failed:', err.message);
+  }
+  process.exitCode = 1;
+} finally {
+  client.release();
+  await pool.end();
 }
-
-if (created.data?.success) {
-  console.log(`Admin created: ${email} (username ${username})`);
-  console.log(`Password set to: ${password}`);
-} else {
-  const msg = String(created.data?.message || '');
-  if (!/already exists|already taken|already registered/i.test(msg)) {
-    console.error('Failed:', msg);
-    process.exit(1);
-  }
-  console.log('Account already exists — updating its password instead…');
-  const { data: rows, error } = await admin
-    .from('profiles')
-    .select('id,username,role')
-    .eq('username', username)
-    .maybeSingle();
-  if (error || !rows) {
-    console.error('Could not find the existing profile for', username, error?.message ?? '');
-    process.exit(1);
-  }
-  const reset = await admin.rpc('admin_reset_password', {
-    p_employee_id: rows.id,
-    p_password_hash: hashPassword(password),
-  });
-  if (!reset.data?.success) {
-    console.error('Failed to set password:', reset.data?.message ?? reset.error?.message);
-    process.exit(1);
-  }
-  console.log(`Password updated for ${email} (username ${username}).`);
-}
-
-const check = await admin.from('profiles').select('id,username,role,is_active').eq('username', username).maybeSingle();
-console.log('Profile:', JSON.stringify(check.data));
