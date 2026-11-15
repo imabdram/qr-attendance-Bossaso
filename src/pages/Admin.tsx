@@ -976,6 +976,7 @@ function QrDisplay() {
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(intervalSec);
+  const [customUnit, setCustomUnit] = useState<'sec' | 'min' | 'hour'>('sec');
   const [revoking, setRevoking] = useState(false);
   const [notice, setNotice] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
 
@@ -990,11 +991,37 @@ function QrDisplay() {
   };
 
   const handleIntervalChange = (val: number) => {
-    const clamped = Math.max(10, Math.min(3600, val));
+    // Up to 24 hours: the token lifetime is interval + 25s, and the database
+    // clamps tokens at 86400s.
+    const clamped = Math.max(10, Math.min(86400, val));
     setIntervalSec(clamped);
-    setCustomInterval(String(clamped));
     localStorage.setItem('qr_interval', String(clamped));
     setCountdown(clamped);
+  };
+
+  const applyPreset = (seconds: number) => {
+    setCustomInterval(String(seconds));
+    setCustomUnit('sec');
+    handleIntervalChange(seconds);
+  };
+
+  const applyCustomInterval = () => {
+    const num = parseFloat(customInterval);
+    if (!isFinite(num) || num <= 0) return;
+    const multiplier = customUnit === 'hour' ? 3600 : customUnit === 'min' ? 60 : 1;
+    handleIntervalChange(Math.round(num * multiplier));
+  };
+
+  const formatDuration = (seconds: number) => {
+    if (seconds >= 3600) {
+      const h = seconds / 3600;
+      return `${Number.isInteger(h) ? h : h.toFixed(1)}h`;
+    }
+    if (seconds >= 60) {
+      const m = seconds / 60;
+      return `${Number.isInteger(m) ? m : m.toFixed(1)}m`;
+    }
+    return `${seconds}s`;
   };
 
   const refresh = async () => {
@@ -1114,7 +1141,7 @@ function QrDisplay() {
             className={`qr-mode-tab ${mode === 'auto' ? 'active' : ''}`}
             onClick={() => handleModeChange('auto')}
           >
-            <RotateCw size={15} /> Auto Every {intervalSec}s
+            <RotateCw size={15} /> Auto Every {formatDuration(intervalSec)}
           </button>
           <button
             type="button"
@@ -1137,36 +1164,45 @@ function QrDisplay() {
           <div style={{ textAlign: 'center' }}>
             <p className="tiny muted">Select how often the QR code automatically refreshes:</p>
             <div className="interval-row">
-              {[15, 25, 30, 60, 120, 300].map((s) => (
+              {[15, 25, 30, 60, 120, 300, 3600, 14400].map((s) => (
                 <button
                   key={s}
                   type="button"
                   className={`interval-btn ${intervalSec === s ? 'active' : ''}`}
-                  onClick={() => handleIntervalChange(s)}
+                  onClick={() => applyPreset(s)}
                 >
-                  {s >= 60 ? `${s / 60}m` : `${s}s`}
+                  {formatDuration(s)}
                 </button>
               ))}
               <div className="interval-custom">
                 <span>Custom:</span>
                 <input
                   type="number"
-                  min="10"
-                  max="3600"
+                  min="1"
                   value={customInterval}
                   onChange={(e) => setCustomInterval(e.target.value)}
-                  onBlur={() => {
-                    const num = parseInt(customInterval, 10);
-                    if (!isNaN(num)) handleIntervalChange(num);
-                  }}
+                  onBlur={applyCustomInterval}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      const num = parseInt(customInterval, 10);
-                      if (!isNaN(num)) handleIntervalChange(num);
-                    }
+                    if (e.key === 'Enter') applyCustomInterval();
                   }}
                 />
-                <span>sec</span>
+                <select
+                  value={customUnit}
+                  onChange={(e) => setCustomUnit(e.target.value as 'sec' | 'min' | 'hour')}
+                  aria-label="Interval unit"
+                  style={{
+                    border: '1px solid #dce5ee',
+                    borderRadius: '7px',
+                    padding: '6px 8px',
+                    background: 'white',
+                    color: '#111827',
+                    fontSize: '12px',
+                  }}
+                >
+                  <option value="sec">sec</option>
+                  <option value="min">min</option>
+                  <option value="hour">hours</option>
+                </select>
               </div>
             </div>
           </div>
@@ -1195,11 +1231,7 @@ function QrDisplay() {
 
       {/* Printable Heading for printouts */}
       <h1 className="print-only-title">Bosaso Office Attendance Check-In</h1>
-      <p className="print-only-sub">Bosaso Branch · Scan this QR code with your phone camera to record Time In.</p>
-      <p className="print-only-expiry">
-        Valid until <strong>{expiresLabel || '—'}</strong> · Ask the administrator for a fresh poster
-        after this time.
-      </p>
+      <p className="print-only-sub">Bosaso Branch</p>
 
       {/* Main QR Display Card */}
       <section className="qr-display-card">
@@ -1234,7 +1266,7 @@ function QrDisplay() {
                 ? 'Valid for 24 hours. Employees can scan it until it expires.'
                 : mode === 'manual'
                 ? 'Only updates when an administrator refreshes it.'
-                : `Automatically changes every ${intervalSec} seconds.`}
+                : `Automatically changes every ${formatDuration(intervalSec)}.`}
             </p>
 
             <div className="expiry">
@@ -1245,7 +1277,7 @@ function QrDisplay() {
                 </>
               ) : (
                 <>
-                  Rotates in <strong>{countdown}s</strong>
+                  Rotates in <strong>{formatDuration(countdown)}</strong>
                 </>
               )}
             </div>

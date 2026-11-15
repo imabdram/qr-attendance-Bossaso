@@ -26,13 +26,12 @@
   .topbar,.bottom-nav,.page-head,.qr-config-panel,.qr-action-row,.live-label,.expiry,.admin-welcome,.tiny{display:none !important}
   .page,.qr-page{max-width:100% !important;padding:0 !important;margin:0 !important}
   .qr-display-card{border:none !important;box-shadow:none !important;padding:40px 0 !important;margin:0 auto !important}
+  .qr-display-card>h2,.qr-display-card>p.muted{display:none !important}
   .qr-code-box{border:3px solid #111827 !important;padding:24px !important;border-radius:20px !important}
   .print-only-title{display:block !important;font-size:28px;font-weight:800;color:#111827;margin-bottom:12px}
   .print-only-sub{display:block !important;font-size:14px;color:#6b7280;margin-bottom:10px}
-  .print-only-expiry{display:block !important;font-size:13px;color:#6b7280;margin-bottom:24px}
 }
 .print-only-title,.print-only-sub{display:none}
-.print-only-expiry{display:none}
 .page-head-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 
 /* Modals & Dialogs */
