@@ -30,6 +30,7 @@ import {
   Trash2,
   KeyRound,
   ShieldCheck,
+  Lock,
   X,
   Filter,
 } from 'lucide-react';
@@ -959,7 +960,7 @@ function Employees() {
   );
 }
 
-type QrMode = 'auto' | 'manual' | 'fixed';
+type QrMode = 'auto' | 'manual' | 'fixed' | 'permanent';
 
 function QrDisplay() {
   const [mode, setMode] = useState<QrMode>(() => {
@@ -1028,11 +1029,13 @@ function QrDisplay() {
     setLoading(true);
     try {
       // Calculate token lifetime based on mode:
-      // Fixed: 1 year (31,536,000 seconds)
-      // Manual: 24 hours (86,400 seconds)
+      // Permanent: 1 year (until revoked by hand)
+      // Fixed/Manual: 24 hours
       // Auto: interval + 25 seconds
       const durationSeconds =
-        modeRef.current === 'fixed'
+        modeRef.current === 'permanent'
+          ? 31536000
+          : modeRef.current === 'fixed'
           ? 86400
           : modeRef.current === 'manual'
           ? 86400
@@ -1157,6 +1160,13 @@ function QrDisplay() {
           >
             <Pin size={15} /> 24-Hour QR
           </button>
+          <button
+            type="button"
+            className={`qr-mode-tab ${mode === 'permanent' ? 'active' : ''}`}
+            onClick={() => handleModeChange('permanent')}
+          >
+            <Lock size={15} /> Permanent (Until Revoked)
+          </button>
         </div>
 
         {/* Sub-controls based on active mode */}
@@ -1227,6 +1237,23 @@ function QrDisplay() {
             </div>
           </div>
         )}
+
+        {mode === 'permanent' && (
+          <div style={{ textAlign: 'center' }}>
+            <p className="tiny muted">
+              Stays valid for <strong>one year or until you revoke it</strong> — only
+              <strong> Regenerate QR</strong> or <strong>Revoke QR Codes</strong> changes it.
+            </p>
+            <p className="tiny" style={{ color: '#b91c1c', marginTop: '4px' }}>
+              A photo of this code can be used from anywhere. Use it only at a staffed entrance.
+            </p>
+            <div className="qr-action-row">
+              <button className="primary" onClick={printQR}>
+                <Printer size={16} /> Print QR Poster
+              </button>
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Printable Heading for printouts */}
@@ -1248,7 +1275,9 @@ function QrDisplay() {
               background: mode === 'fixed' ? '#b91c1c' : mode === 'manual' ? '#b7791f' : '#dc2626',
             }}
           />{' '}
-          {mode === 'fixed'
+          {mode === 'permanent'
+            ? 'PERMANENT QR (UNTIL REVOKED)'
+            : mode === 'fixed'
             ? '24-HOUR QR'
             : mode === 'manual'
             ? 'STATIC (CHANGE ON DEMAND)'
@@ -1262,7 +1291,9 @@ function QrDisplay() {
             </div>
             <h2>Scan to record Time In</h2>
             <p className="muted">
-              {mode === 'fixed'
+              {mode === 'permanent'
+                ? 'Stays valid until an administrator revokes it.'
+                : mode === 'fixed'
                 ? 'Valid for 24 hours. Employees can scan it until it expires.'
                 : mode === 'manual'
                 ? 'Only updates when an administrator refreshes it.'
@@ -1270,7 +1301,12 @@ function QrDisplay() {
             </p>
 
             <div className="expiry">
-              {mode === 'fixed' || mode === 'manual' ? (
+              {mode === 'permanent' ? (
+                <>
+                  <Lock size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />
+                  Valid until <strong>revoked</strong> by an administrator
+                </>
+              ) : mode === 'fixed' || mode === 'manual' ? (
                 <>
                   <Pin size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />
                   Expires <strong>{expiresLabel}</strong>
