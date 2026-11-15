@@ -2,138 +2,115 @@
 
 How the Bosaso attendance database is backed up, restored, and verified.
 
-- **Database:** Neon project `qr-attendance-system-Bossaso` (`winter-surf-70097462`)
-- **Branch:** `production`
-- **Method:** Neon snapshots (copy-on-write, instant, storage billed only for changed pages)
-- **Daily job:** Windows scheduled task **“Bosaso DB Backup”**, every day at **02:00**
-- **Retention:** 14 days of `auto-*` snapshots
-- **Log:** `backups/backup.log` (git-ignored)
+- **Database:** Neon project `qr-attendance-system-Bossaso`, branch `production`
+- **Layer 1 (primary):** daily **logical dump** → `backups/db-YYYY-MM-DD.json.gz`, 14-day retention
+- **Layer 2 (secondary):** one **Neon snapshot**, rotated daily (Free plan allows only **1 manual snapshot**)
+- **Daily trigger:** Windows task **“Bosaso DB Backup”** at **02:00**
+- **Catch-up trigger:** `bosaso-backup.cmd` in the Startup folder — runs the same idempotent script at logon when the PC was off at 02:00
+- **Log:** `backups/backup.log`
 
-## What is in a snapshot
+> Why not daily snapshots? The Neon **Free** plan allows one manual snapshot
+> ([quota FAQ](https://neon.com/faqs/free-plan-limits-and-quotas)); the Launch
+> plan allows 100. Until then, history lives in the JSON dumps.
 
-A snapshot covers the **whole branch**, so it includes:
+## What is backed up
 
-| Schema | Contents |
+| Source | Tables |
 | --- | --- |
-| `public` | `profiles`, `attendance`, `qr_tokens`, `app_settings` + functions and triggers |
-| `neon_auth` | users, credential password hashes, sessions, JWKS |
+| `public` | `profiles`, `attendance`, `qr_tokens`, `app_settings` |
+| `neon_auth` | `user`, `account` (scrypt password hashes), `session` |
 
-That means restoring a snapshot restores logins as well as attendance records.
+Restoring a dump restores logins as well as attendance. Sessions are exported but
+not restored — everyone signs in again.
 
-## Automatic daily backup
+The snapshots cover the **whole branch**, including functions, triggers, and RLS.
 
-The task runs [`scripts/backup-db.ps1`](../scripts/backup-db.ps1), which:
+## Daily run (what happens)
 
-1. lists existing snapshots;
-2. skips if a snapshot for today (UTC) already exists — so it is safe to run repeatedly;
-3. creates `auto-YYYY-MM-DD` on the `production` branch;
-4. deletes `auto-*` snapshots older than 14 days;
-5. appends every step to `backups/backup.log`.
+`scripts/backup-db.ps1`:
 
-### Check it is scheduled
+1. runs `scripts/export-backup.mjs` → writes today’s `.json.gz` and prunes dumps older than 14 days;
+2. lists snapshots and creates `auto-YYYY-MM-DD` unless today already has one;
+3. if snapshot creation hits the Free-plan quota, deletes the oldest `auto-*` and retries once;
+4. logs every step to `backups\backup.log`.
 
-```powershell
-schtasks /Query /TN "Bosaso DB Backup"
-schtasks /Query /TN "Bosaso DB Backup" /FO LIST /V   # detailed
-```
+Both steps are idempotent — running it twice in a day is safe.
 
-### Run it now (does not wait for 02:00)
+## Check that it is working
 
 ```powershell
-schtasks /Run /TN "Bosaso DB Backup"
-# or directly:
-powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup-db.ps1
-```
-
-### Change the time
-
-```powershell
-schtasks /Change /TN "Bosaso DB Backup" /ST 01:30
-```
-
-### Remove it
-
-```powershell
-schtasks /Delete /TN "Bosaso DB Backup" /F
-```
-
-> The task is created with *StartWhenAvailable* enabled and battery restrictions
-> off, so a run missed because the PC was off executes at the next opportunity.
-
-## Manual backup
-
-Take one before risky changes (schema migrations, bulk imports):
-
-```bash
-neon snapshots create --branch production --name "before-changes-2026-11-10"
+Get-ChildItem backups | Select-Object Name, Length, LastWriteTime
+Get-Content backups\backup.log -Tail 15
+schtasks /Query /TN "Bosaso DB Backup" /FO LIST
 neon snapshots list
 ```
 
-Restore or delete a specific snapshot:
+Healthy output: a `db-<today>.json.gz` (a few KB), a log ending in
+`Backup complete.`, task state **Ready**, and one `auto-*` snapshot from today.
+
+## Manual backup
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup-db.ps1
+```
+
+Snapshot only:
+
+```bash
+neon snapshots create --branch production --name "before-changes-2026-11-15"
+neon snapshots list
+```
+
+## Restore
+
+### From a JSON dump (recommended on the Free plan)
+
+```bash
+node scripts/restore-backup.mjs backups/db-2026-11-15.json.gz --confirm
+```
+
+This **replaces** the current rows in the restored tables (it truncates first) and
+drops sessions, so everyone signs in again. Stop writes to the app while it runs.
+Without `--confirm` it refuses to touch anything.
+
+### From a snapshot (whole branch)
 
 ```bash
 neon snapshots restore <snapshot-id> --name restore-check
-neon snapshots delete <snapshot-id>
-```
-
-## Restore procedure
-
-Never restore straight onto `production`. Restore into a branch, verify, then
-promote:
-
-```bash
-# 1. restore into a new branch
-neon snapshots restore snap-xxxxxxxx --name restore-check
-
-# 2. point the app at it (or inspect with SQL) and confirm the data looks right
-neon connection-string restore-check
-
-# 3. when satisfied, make it the production data
+# verify the restored branch, then:
 neon snapshots finalize restore-check
 ```
 
-For “oops, one row was deleted” cases, prefer **Time Travel** / creating a branch
-from a point in time instead of restoring the whole branch.
+Never restore straight onto `production` without checking the new branch first.
 
 ## Off-site copy (optional)
 
-Snapshots live inside the Neon account. For a copy that survives losing the
-account:
+Dumps and snapshots live on this PC / in the Neon account. For a copy that
+survives both:
 
-### From CI with an API key
-
-```bash
-neon api-keys create --name github-backup      # store as NEON_API_KEY repo secret
-# in GitHub Actions (daily cron):
-neon snapshots create --branch production --name "auto-$(date -u +%F)"
-```
-
-### Logical dump
-
-`pg_dump` against the direct (unpooled) connection string:
-
-```bash
-pg_dump "$DATABASE_URL_UNPOOLED" --format=custom --file=backup.dump
-pg_restore --clean --if-exists --dbname="$DATABASE_URL_UNPOOLED" backup.dump
-```
-
-Postgres client tools are not installed on this machine; a Node export of the
-tables to CSV/JSON can be added if a portable copy is needed.
+- push `backups/*.json.gz` to cloud storage or a private repo (they contain
+  password hashes — keep them private), or
+- run the snapshot from CI with a `NEON_API_KEY` secret:
+  ```bash
+  neon snapshots create --branch production --name "auto-$(date -u +%F)"
+  ```
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| Task does nothing | `neon` CLI not on PATH for the task's user | install with `npm i -g neon`, or edit the task command |
-| `BACKUP FAILED: ...` in the log | not authenticated / `.neon` link missing | run `neon auth`, then `neon link` in the repo |
-| `snapshot creation is not enabled` | plan restriction on scheduled backups | keep the local task (it uses `snapshots create`, which is allowed) |
-| “A snapshot from … already exists, skipping” | daily job already ran | expected; nothing to do |
-| Restore looks empty | wrong branch/database restored | check `neon branches list`, restore the `production` snapshot |
+| Log: `snapshots limit exceeded` | Free plan = 1 manual snapshot | handled automatically (rotation); dumps still run |
+| Task `Last Result: -1073741510` (0xC000013A) | task was terminated (logoff/shutdown) mid-run | the Startup catch-up runs it again at next logon |
+| Missing dumps for several days | PC was off and no logon happened | run the script manually; logon catch-up covers future gaps |
+| `BACKUP FAILED: ENOENT ... C:\C:\...` | old path bug | fixed; update the repo |
+| `EPERM ... .config\neon\*.lock` | CLI cache write blocked by a sandbox | run from a normal terminal |
+| Restore fails on `profiles` | FK order / duplicate rows | the restore script inserts parents first; check the dump has `neon_auth.user` |
+| `Access is denied` editing the task | Task Scheduler needs elevation | use the Startup catch-up or run `schtasks` as admin |
 
 ## Verification checklist
 
-- [ ] `neon snapshots list` shows today's `auto-*` or `backup-*`
-- [ ] `schtasks /Query /TN "Bosaso DB Backup"` reports **Ready** with tomorrow's run time
-- [ ] `backups/backup.log` has a recent `Backup complete.` line
+- [ ] `backups\db-<today>.json.gz` exists
+- [ ] `backups\backup.log` ends with `Backup complete.`
+- [ ] `neon snapshots list` shows today’s `auto-*`
+- [ ] `%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\bosaso-backup.cmd` exists
 - [ ] A test restore into `restore-check` shows the expected tables and admin user
-- [ ] `neon snapshots finalize restore-check` only after verification

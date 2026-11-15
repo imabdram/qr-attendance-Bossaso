@@ -1,17 +1,25 @@
-# Daily Neon snapshot backup for the Bosaso attendance database.
+# Daily backup for the Bosaso attendance database.
 #
 #   powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup-db.ps1
 #
-# Creates one snapshot per day named auto-YYYY-MM-DD on the production branch and
-# deletes auto-* snapshots older than 14 days. Registered as the Windows scheduled
-# task "Bosaso DB Backup" (daily 02:00). Log: backups\backup.log
+# Two layers:
+#   1. LOGICAL DUMP (primary): scripts/export-backup.mjs writes
+#      backups/db-YYYY-MM-DD.json.gz and keeps 14 days. Works on every Neon plan
+#      and is independent of the snapshot quota.
+#   2. NEON SNAPSHOT (secondary, best effort): one snapshot per day. The Free
+#      plan allows only ONE manual snapshot, so if creation hits the quota the
+#      oldest auto-* snapshot is deleted and the create is retried once.
+#
+# Registered as the Windows scheduled task "Bosaso DB Backup" (daily 02:00).
+# Log: backups\backup.log
 
-$ErrorActionPreference = 'Stop'
+$ErrorActionPreference = 'Continue'
 $root = Split-Path -Parent $PSScriptRoot
 Set-Location $root
 
 $neon = Join-Path $env:APPDATA 'npm\neon.cmd'
 if (-not (Test-Path $neon)) { $neon = 'neon' }
+$node = 'node'
 
 $logDir = Join-Path $root 'backups'
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
@@ -24,24 +32,49 @@ function Write-Log($message) {
 }
 
 try {
+  # ---------- 1) logical dump (always runs) ----------
+  Write-Log 'Exporting logical backup ...'
+  $export = & $node 'scripts/export-backup.mjs' 2>&1
+  Write-Log ($export -join "`n")
+  if ($LASTEXITCODE -ne 0) { throw "Logical export failed (exit $LASTEXITCODE)." }
+
+  # ---------- 2) snapshot (best effort) ----------
   $today = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')
   $snapshotName = "auto-$today"
 
   $listOutput = & $neon snapshots list 2>&1
   $rows = @($listOutput | Where-Object { $_ -match '^snap-' })
-
-  # One snapshot per day: skip if anything was already taken today (UTC).
   $takenToday = $rows | Where-Object { $_ -match $today }
+
   if ($takenToday) {
-    Write-Log "A snapshot from $today already exists, skipping."
-    exit 0
+    Write-Log "Snapshot $snapshotName already exists, skipping."
+  } else {
+    Write-Log "Creating snapshot $snapshotName ..."
+    $created = & $neon snapshots create --branch production --name $snapshotName 2>&1
+    $createOk = $LASTEXITCODE -eq 0
+
+    if (-not $createOk -and (($created -join ' ') -match 'limit exceeded')) {
+      # Free plan: only one manual snapshot. Rotate the oldest auto-* and retry.
+      $auto = @($rows | Where-Object { $_ -match 'auto-' } | Sort-Object)
+      if ($auto.Count -gt 0) {
+        $oldest = $auto[0] -split '\s{2,}'
+        Write-Log "Snapshot quota reached; deleting oldest ($($oldest[1])) and retrying ..."
+        & $neon snapshots delete $oldest[0] 2>&1 | Out-Null
+        $created = & $neon snapshots create --branch production --name $snapshotName 2>&1
+        $createOk = $LASTEXITCODE -eq 0
+      }
+    }
+
+    if ($createOk) {
+      Write-Log ($created -join ' ')
+    } else {
+      # The logical dump above is still a valid backup; do not fail the run.
+      Write-Log "Snapshot skipped: $(($created -join ' ').Trim())"
+    }
   }
 
-  Write-Log "Creating snapshot $snapshotName ..."
-  $created = & $neon snapshots create --branch production --name $snapshotName 2>&1
-  Write-Log ($created -join ' ')
-
-  # Retention: keep 14 days of automatic snapshots.
+  # Retention: keep 14 days of auto-* snapshots (only meaningful on paid plans;
+  # on the Free plan there is at most one).
   $cutoff = (Get-Date).ToUniversalTime().AddDays(-14)
   foreach ($row in $rows) {
     $cols = $row -split '\s{2,}'
