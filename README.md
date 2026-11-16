@@ -1,249 +1,140 @@
 # Bosaso Attendance Portal
 
-QR-based employee **Time In** for the Bosaso branch. A rotating office QR code is
-shown on the admin dashboard; employees scan it from their phones to record
-attendance. Admins manage accounts, monitor today's arrivals, and export
-date-filtered Excel reports.
+QR check-in for employees. Admins show (or print) a QR code; employees scan it
+with their phone to record **Time In**. One check-in per person per day, Friday
+is off, and late/on-time is decided in **Africa/Mogadishu** time.
 
-## Stack
+**Live:** https://qr-attendance-bossaso.vercel.app
 
-- React 19 + TypeScript + Vite (PWA)
-- **Neon Lakebase Postgres** (project `qr-attendance-system-Bossaso` / `winter-surf-70097462`, branch `production`)
-- **Neon Auth** (Managed Better Auth) for sign-in, sessions, and JWT issuance
-- **Neon Data API** (PostgREST-compatible) for tables and stored functions, guarded by RLS
-- Supabase JS used **only** as the PostgREST transport for the Data API
-- `html5-qrcode` scanner, `qrcode.react` display, `xlsx` export
+## What we use
 
-## Architecture
+| Piece | What for |
+| --- | --- |
+| **React 19 + TypeScript + Vite** | The app (SPA, installable PWA) |
+| **Neon Postgres** | Tables, functions, RLS — project `winter-surf-70097462`, branch `production` |
+| **Neon Auth** (Managed Better Auth) | Sign-in, sessions, JWT (`/neondb/auth`) |
+| **Neon Data API** (PostgREST) | Tables + RPCs from the browser (`/neondb/rest/v1`) |
+| **supabase-js** | HTTP transport to the Data API only (every request sends the Neon JWT) |
+| **Vercel** | Hosting (static build) |
+| `html5-qrcode` / `qrcode.react` | Camera scanner / QR rendering |
+| `xlsx` | Excel reports |
+
+There is no app server: RLS + `SECURITY DEFINER` functions enforce access.
+
+## How it works
+
+- **Admin** → QR Display → *Changed by hand* (30-day code, printable) or
+  *Auto every X* (1 min … 1 day, or custom sec/min/hours/days). Changing the code
+  asks for confirmation.
+- **Employee** → sign in → scan → a row is written with the Mogadishu date/time.
+  Duplicate scans are rejected by a unique `(employee_id, work_date)`.
+- **Dashboard / Reports** — today's arrivals, late count, missing people, and an
+  Excel export with Present / Late / **Absent** (absences are computed per
+  employee per working day).
+- Shift late thresholds live in `app_settings` (`late_after_morning`,
+  `late_after_afternoon`) and can be edited on the dashboard.
+
+## Project layout
 
 ```
-Browser (React SPA)
-   │  sign-in / session cookie
-   ├──────────────► Neon Auth  /neondb/auth
-   │                   └─ issues short-lived JWT (GET /token)
-   │  Bearer <JWT>
-   └──────────────► Neon Data API  /neondb/rest/v1
-                       ├─ tables (profiles, attendance, qr_tokens, app_settings)
-                       └─ RPCs (create_qr_token, scan_attendance, admin_*)
+src/pages/       Login, Admin (dashboard/employees/QR/reports), Employee scanner
+src/lib/         neon.ts (auth + JWT + Data API client), api.ts (RPC wrappers), date.ts
+db/migrations/   000 base schema … 008 (tokens, reports, admin lock, 10y cap)
+scripts/         migrations, admin/password, e2e tests, backups
+BACKUP.md        backup + restore runbook
 ```
 
-Row Level Security still applies: `auth.uid()` comes from the JWT, and every
-admin RPC re-checks `public.is_admin()`.
-
-## Environment
-
-Copy `.env.example` to `.env.local`:
-
-```env
-VITE_NEON_AUTH_URL=https://<endpoint>.neonauth.c-2.eu-west-2.aws.neon.tech/neondb/auth
-VITE_NEON_DATA_API_URL=https://<endpoint>.apirest.c-2.eu-west-2.aws.neon.tech/neondb/rest/v1
-```
-
-Server-side only (migrations/scripts, never bundled):
-
-```env
-DATABASE_URL=postgresql://…            # pooled
-DATABASE_URL_UNPOOLED=postgresql://…   # direct, used by scripts
-```
-
-Both `VITE_` values have production defaults baked into `src/lib/neon.ts`, so a
-Vercel build works even if the variables are not set — but setting them per
-environment is recommended.
-
-## Local development
+## Run it locally
 
 ```bash
 npm install
-npm run dev      # http://localhost:5173
-npm run build    # tsc -b && vite build
+npm run dev        # http://localhost:5173
+npm run build      # tsc -b && vite build  → dist/
 npm run preview
 ```
 
-## Database
+`.env.local` (never commit):
 
-Schema objects live in `db/migrations/` (the historical `supabase/migrations`
-files document the original schema and are no longer applied).
+```env
+VITE_NEON_AUTH_URL=https://<host>/neondb/auth
+VITE_NEON_DATA_API_URL=https://<host>/neondb/rest/v1
+DATABASE_URL=postgresql://…            # pooled
+DATABASE_URL_UNPOOLED=postgresql://…   # direct (scripts/migrations)
+ADMIN_EMAIL=admin@attendance-login.example.com
+ADMIN_PASSWORD=…
+```
+
+If you build the database from scratch:
 
 ```bash
-node scripts/apply-sql.mjs db/migrations/001_neon_auth_scrypt_rpcs.sql
-neon data-api refresh-schema      # after adding/removing functions
+neon link --project-id <id> --branch production
+neon deploy                                  # Auth + Data API from neon.ts
+for f in db/migrations/*.sql; do node scripts/apply-sql.mjs "$f"; done
+neon data-api refresh-schema                 # after new functions
+node scripts/bootstrap-admin.mjs             # first admin
 ```
-
-### Stored functions
-
-| Function | Purpose |
-| --- | --- |
-| `create_qr_token(p_duration_seconds)` | Issues a QR token (30 s – 24 h), stores only its SHA-256 hash |
-| `revoke_qr_tokens()` | Admin-only: invalidates every active QR code at once |
-| `attendance_report(p_from, p_to)` | Admin-only grid of every employee × working day, with `status = 'absent'` where nothing was recorded |
-| `scan_attendance(p_token)` | Validates the token and writes a Time In row (Mogadishu date, shift-aware late detection) |
-| `admin_create_user(...)` | Creates `neon_auth.user` + credential account + `public.profiles` row |
-| `admin_update_employee(...)` | Updates name / phone / department / shift |
-| `admin_reset_password(...)` | Replaces the credential hash and drops existing sessions |
-| `admin_delete_employee(...)` | Deletes attendance, profile, account, sessions, and the auth user |
-| `is_admin()` | RLS helper backed by the JWT |
-
-### Passwords
-
-Neon Auth (Better Auth) verifies **scrypt** hashes (`<32 hex salt>:<128 hex key>`,
-N=16384, r=16, p=1, dkLen=64). The browser hashes the password
-(`hashPassword()` in `src/lib/neon.ts`) and the RPC stores the hash, so no
-plaintext password ever reaches the database. Older bcrypt hashes cannot be
-verified by Better Auth — use *Reset password* in the Employees screen to migrate
-an account.
-
-## Backups
-
-Full runbook: [`BACKUP.md`](BACKUP.md). Short version: one snapshot per day via the
-Windows task **Bosaso DB Backup** (02:00, 14-day retention, log in
-`backups/backup.log`), plus `neon snapshots create` for manual backups.
-
-The database lives on Neon; backups are Neon snapshots (copy-on-write, so they cost
-only the storage of changed pages).
-
-### Automatic (this machine)
-
-`scripts/backup-db.ps1` takes one snapshot per day and keeps 14 days of them:
-
-- Windows scheduled task: **Bosaso DB Backup**, daily at **02:00** local time.
-- Snapshots are named `auto-YYYY-MM-DD`; older `auto-*` ones are pruned.
-- Log: `backups/backup.log` (git-ignored).
-- Missed runs (PC off) execute at the next opportunity; battery restrictions are off.
-
-Manage it:
-
-```powershell
-schtasks /Query /TN "Bosaso DB Backup"
-schtasks /Run   /TN "Bosaso DB Backup"     # run now
-schtasks /Delete /TN "Bosaso DB Backup" /F # remove
-powershell -NoProfile -File scripts\backup-db.ps1   # manual run
-```
-
-Neon's own automatic backup schedule is **not enabled** for this project (plan
-limitation); the local task fills that gap. The project still has its short
-point-in-time restore window for "oops, deleted a row" recovery.
-
-### Manual snapshot before risky changes
-
-```bash
-neon snapshots create --branch production --name "before-changes-$(date +%F)"
-neon snapshots list
-```
-
-### Restore
-
-Always restore into a new branch first, verify, then switch over:
-
-```bash
-neon snapshots restore <snapshot-id> --name restore-check
-neon snapshots finalize restore-check   # when the restored branch looks right
-```
-
-### Off-site copy (optional)
-
-For a backup that does not depend on this PC, run the same command from CI:
-
-```bash
-neon snapshots create --branch production --name "auto-$(date -u +%F)"
-```
-
-Create an API key with `neon api-keys create --name github-backup`, store it as the
-`NEON_API_KEY` repository secret, and run the command from a GitHub Actions cron
-job. Snapshots include the `neon_auth` schema, so administrator and employee
-logins are covered as well as attendance.
 
 ## Accounts
 
-- Admins sign in with their real email (or `admin` for the bootstrap account).
-- Employees sign in with a **username**; the app appends
-  `@attendance-login.example.com` before calling Neon Auth.
-- **The web app can only create employees.** Employees → *Add Employee* has no
-  admin option, `createEmployeeAccount` hard-codes `p_role: 'employee'`, and the
-  database rejects `admin_create_user(p_role => 'admin')` plus any profile role
-  change coming from PostgREST.
-- Administrators are created **server-side only**: `scripts/add-admin.mjs`, the
-  Neon SQL Editor, or the Neon platform. The Employees list therefore shows
-  employees only.
-- Use *Reset password* (key icon) to set a new password for an employee; admins
-  are reset with `scripts/reset-password.mjs`.
+- **Employees** are created in the app: *Employees → Add Employee* (username +
+  password). The frontend can only create employees.
+- **Admins are server-side only** (by design):
 
-### Adding an admin (server-side only)
+  ```bash
+  node scripts/add-admin.mjs you@company.com 'StrongPass123!' "Your Name"
+  ```
 
-```bash
-node scripts/add-admin.mjs dhomdesign@gmail.com 'SomeStrongPassword!' "Dhom Design"
-```
+  They sign in with the full email. Re-running resets the password.
+- **Forgot a password?** `node scripts/reset-password.mjs admin 'NewPass123!'`
+  (no login needed; writes the Better Auth scrypt hash directly).
 
-Re-running the same command with the same email **changes that admin's password**.
-It writes straight to the database with `DATABASE_URL_UNPOOLED`, so no admin
-session or `ADMIN_EMAIL` / `ADMIN_PASSWORD` is needed:
+## Database rules worth knowing
 
-```env
-DATABASE_URL_UNPOOLED=postgresql://…
-```
+- `auth.uid()` comes from the Neon JWT; `is_admin()` reads `profiles.role`.
+- `admin_create_user` **rejects** `role='admin'`, and a trigger blocks role
+  changes coming through the Data API — admins can't be minted from the browser.
+- QR tokens are stored as SHA-256 hashes only. Lifetimes: auto = interval + 25 s,
+  changed-by-hand = 30 days, hard cap 10 years.
+- Run `neon data-api refresh-schema` after adding/renaming functions, or you get
+  `PGRST202`.
 
-### Forgotten password (break-glass)
+## Backups
 
-The Reset password screen needs an existing admin session, and the shared SMTP
-cannot deliver to `@attendance-login.example.com`, so a locked-out admin is
-recovered from the database instead:
+Daily JSON dumps (14 days) + a rotated Neon snapshot. Full runbook:
+[BACKUP.md](BACKUP.md).
 
 ```bash
-node scripts/reset-password.mjs admin@attendance-login.example.com 'NewStrongPassword!'
-node scripts/reset-password.mjs yacquub 'AnotherStrongPassword!'   # username also works
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts\backup-db.ps1
+node scripts/restore-backup.mjs backups/db-YYYY-MM-DD.json.gz --confirm
 ```
 
-It writes the scrypt hash Better Auth expects straight into
-`neon_auth.account` and deletes that user's sessions — no login required, only
-`DATABASE_URL_UNPOOLED` from `.env.local` (or any machine holding the connection
-string). Use it for employees too.
+## Deploy (Vercel)
 
-In the Neon SQL Editor the same thing needs a hash generated outside Postgres
-(`crypt()` is bcrypt, which Better Auth rejects):
-
-```bash
-node -e "const {scryptSync,randomBytes}=require('node:crypto');const p=process.argv[1];const s=randomBytes(16).toString('hex');console.log(s+':'+scryptSync(p.normalize('NFKC'),s,64,{N:16384,r:16,p:1,maxmem:128*16384*16*2}).toString('hex'))" 'NewStrongPassword!'
-```
-
-```sql
-update neon_auth.account set password = '<paste-hash>', "updatedAt" = now()
- where "providerId" = 'credential'
-   and "userId" = (select id from neon_auth.user where email = 'admin@attendance-login.example.com');
-delete from neon_auth.session
- where "userId" = (select id from neon_auth.user where email = 'admin@attendance-login.example.com');
-```
-
-### QR code lifetime
-
-Every QR code expires within **24 hours** (rotating codes expire within a minute).
-There is no permanent option: a photographed permanent poster would allow check-in
-from anywhere. For a printed poster use the **24-Hour QR** mode and reprint daily,
-or press **Revoke QR Codes** if a code leaks.
-
-## Deployment (Vercel)
-
-1. Push this repository to GitHub.
-2. Import the repo in Vercel (framework preset **Vite**, build `npm run build`,
-   output `dist`).
-3. Add `VITE_NEON_AUTH_URL` and `VITE_NEON_DATA_API_URL` for Production and Preview.
-4. Register the deployment domain as a Neon Auth trusted origin:
+1. Import the repo; preset **Vite**, build `npm run build`, output `dist`.
+2. Set `VITE_NEON_AUTH_URL` and `VITE_NEON_DATA_API_URL` (Production + Preview).
+3. Trust the domain in **both** places:
 
    ```bash
-   neon neon-auth domain add https://<project>.vercel.app
-   neon neon-auth domain list
+   neon neon-auth domain add https://<project>.vercel.app     # sign-in
+   neon data-api update --server-cors-allowed-origins "https://<project>.vercel.app"  # data
    ```
 
-5. `vercel.json` rewrites every path to `index.html` so client-side routes work.
+   Missing either one shows "Failed to fetch" or a 403 on login.
+4. `vercel.json` handles SPA rewrites and no-cache for `index.html`/`sw.js`.
 
-Without a registered origin, Neon Auth rejects browser sign-in requests from the
-deployed domain.
-
-## Verification
+## Checks
 
 ```bash
-# ADMIN_EMAIL / ADMIN_PASSWORD must be set (shell or .env.local)
-node scripts/e2e-neon.mjs              # auth + RPC + RLS + QR cap/revoke checks
-node scripts/ui-login.mjs admin 'the-password' out.png
+node scripts/e2e-neon.mjs        # 18 backend checks (auth, RLS, RPCs, QR, report)
+node scripts/ui-login.mjs admin 'password' out.png /admin
 ```
 
-`scripts/` also contains local helpers (`audit-neon.mjs`, `apply-sql.mjs`,
-`cdp-check.mjs`, UI drivers). They are development tools, not part of the bundle.
+## Troubleshooting
+
+| Symptom | Fix |
+| --- | --- |
+| “Signed in, profile did not load / Failed to fetch” | Data API CORS: `neon data-api update --server-cors-allowed-origins …` |
+| Login 403 / “Failed to fetch” on sign-in | Trusted origin: `neon neon-auth domain add https://…` (no trailing slash) |
+| `PGRST202 could not find the function` | `neon data-api refresh-schema` |
+| Admin action says “Unauthorized” | `is_admin()` drifted; re-apply `db/migrations/007_restore_is_admin.sql` |
+| Old UI after deploy | Hard refresh (service worker) |
