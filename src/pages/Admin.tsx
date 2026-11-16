@@ -968,12 +968,13 @@ function QrDisplay() {
   });
   const [intervalSec, setIntervalSec] = useState<number>(() => {
     const saved = Number(localStorage.getItem('qr_interval'));
-    return Number.isFinite(saved) && saved >= 10 ? saved : 300;
+    return Number.isFinite(saved) && saved >= 10 ? saved : 3600;
   });
   const [customInterval, setCustomInterval] = useState(String(intervalSec));
   const [customUnit, setCustomUnit] = useState<'sec' | 'min' | 'hour' | 'day'>('min');
 
   const [payload, setPayload] = useState('');
+  const [expiresAt, setExpiresAt] = useState('');
   const [err, setErr] = useState('');
   const [loading, setLoading] = useState(false);
   const [countdown, setCountdown] = useState(intervalSec);
@@ -1030,11 +1031,29 @@ function QrDisplay() {
     return `${seconds}s`;
   };
 
+  const formatDurationLong = (seconds: number) => {
+    if (seconds >= 86400) {
+      const d = seconds / 86400;
+      return `${Number.isInteger(d) ? d : d.toFixed(1)} day${d === 1 ? '' : 's'}`;
+    }
+    if (seconds >= 3600) {
+      const h = seconds / 3600;
+      return `${Number.isInteger(h) ? h : h.toFixed(1)} hr`;
+    }
+    if (seconds >= 60) {
+      const m = seconds / 60;
+      return `${Number.isInteger(m) ? m : m.toFixed(1)} min`;
+    }
+    return `${seconds} sec`;
+  };
+
   /**
-   * Manual codes are minted with the maximum lifetime (one year) and simply stay
-   * put — they never rotate, even if nobody changes them for months. Auto codes
-   * live for interval + 25s and are replaced by the rotation timer.
+   * "Changed by hand" codes live 30 days: long enough to print once a month,
+   * short enough that a leaked poster eventually stops working. Auto codes live
+   * for interval + 25s and are replaced by the rotation timer.
    */
+  const MANUAL_TTL_SECONDS = 30 * 24 * 3600;
+
   const refresh = async (options: { confirm?: boolean } = {}) => {
     if (options.confirm) {
       const ok = window.confirm(
@@ -1046,9 +1065,12 @@ function QrDisplay() {
     setLoading(true);
     try {
       const durationSeconds =
-        modeRef.current === 'manual' ? 315360000 : Math.min(315360000, intervalRef.current + 25);
+        modeRef.current === 'manual'
+          ? MANUAL_TTL_SECONDS
+          : Math.min(315360000, intervalRef.current + 25);
       const data = await generateQrToken(durationSeconds);
       setPayload(data.token);
+      setExpiresAt(data.expires_at);
       setErr('');
       setCountdown(intervalRef.current);
       if (options.confirm) {
@@ -1088,6 +1110,15 @@ function QrDisplay() {
     window.print();
   };
 
+  const expiresLabel = expiresAt
+    ? new Intl.DateTimeFormat('en-GB', {
+        timeZone: 'Africa/Mogadishu',
+        day: '2-digit',
+        month: 'short',
+        year: 'numeric',
+      }).format(new Date(expiresAt))
+    : '';
+
   const revokeAll = async () => {
     const ok = window.confirm(
       'Revoke every active QR code?\n\nAnyone scanning the current code will be refused until you generate a new one.'
@@ -1111,14 +1142,11 @@ function QrDisplay() {
         <div>
           <p className="eyebrow">BOSASO OFFICE CHECK-IN</p>
           <h1>Bosaso QR Display</h1>
-          <p className="muted">Display or print the office QR code.</p>
+          <p className="muted">Configure rotation behavior and display or print your QR code.</p>
         </div>
         <div className="page-head-actions">
           <button className="secondary" onClick={revokeAll} disabled={revoking || loading}>
             <ShieldCheck size={16} /> {revoking ? 'Revoking…' : 'Revoke QR Codes'}
-          </button>
-          <button className="secondary" onClick={() => refresh({ confirm: true })} disabled={loading}>
-            <RefreshCw size={16} /> {loading ? 'Changing…' : 'Change QR Now'}
           </button>
         </div>
       </div>
@@ -1140,29 +1168,29 @@ function QrDisplay() {
             className={`qr-mode-tab ${mode === 'manual' ? 'active' : ''}`}
             onClick={() => handleModeChange('manual')}
           >
-            <Hand size={15} /> Changed by Hand
+            <Hand size={15} /> Changed by hand
           </button>
           <button
             type="button"
             className={`qr-mode-tab ${mode === 'auto' ? 'active' : ''}`}
             onClick={() => handleModeChange('auto')}
           >
-            <RotateCw size={15} /> Auto Every {formatDuration(intervalSec)}
+            <RotateCw size={15} /> Auto every {formatDurationLong(intervalSec)}
           </button>
         </div>
 
         {mode === 'manual' && (
           <div style={{ textAlign: 'center' }}>
             <p className="tiny muted">
-              This code stays exactly as it is — it never rotates, even for months — until you press
-              <strong> Change QR Now</strong>. Printing is safe in this mode.
+              The code stays the same until you change it. It expires after 30 days, so press
+              <strong> Change QR Code</strong> at least once a month.
             </p>
             <div className="qr-action-row">
-              <button className="primary" onClick={printQR}>
-                <Printer size={16} /> Print QR Poster
+              <button className="primary" onClick={() => refresh({ confirm: true })} disabled={loading}>
+                <RefreshCw size={16} /> {loading ? 'Changing…' : 'Change QR Code'}
               </button>
-              <button className="secondary" onClick={() => refresh({ confirm: true })} disabled={loading}>
-                <RefreshCw size={16} /> {loading ? 'Changing…' : 'Change QR Now'}
+              <button className="secondary" onClick={printQR}>
+                <Printer size={16} /> Print QR Poster
               </button>
             </div>
           </div>
@@ -1235,7 +1263,7 @@ function QrDisplay() {
             className={'live-dot' + (mode === 'auto' ? ' pulsing' : '')}
             style={{ background: mode === 'manual' ? '#d97706' : '#dc2626' }}
           />{' '}
-          {mode === 'manual' ? 'STATIC QR — CHANGED BY HAND' : 'LIVE ROTATING QR'}
+          {mode === 'manual' ? 'STATIC QR — CHANGES WHEN YOU SAY' : 'LIVE ROTATING QR'}
         </div>
 
         {payload ? (
@@ -1246,15 +1274,15 @@ function QrDisplay() {
             <h2>Scan to record Time In</h2>
             <p className="muted">
               {mode === 'manual'
-                ? 'Stays exactly as it is until an administrator changes it.'
-                : `Automatically changes every ${formatDuration(intervalSec)}.`}
+                ? 'The code stays the same until you change it.'
+                : `Automatically changes every ${formatDurationLong(intervalSec)}.`}
             </p>
 
             <div className="expiry">
               {mode === 'manual' ? (
                 <>
                   <Lock size={14} style={{ verticalAlign: 'middle', marginRight: '4px' }} />
-                  Valid until <strong>changed by hand</strong>
+                  Expires <strong>{expiresLabel}</strong>
                 </>
               ) : (
                 <>
