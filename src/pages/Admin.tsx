@@ -968,10 +968,13 @@ function QrDisplay() {
   });
   const [intervalSec, setIntervalSec] = useState<number>(() => {
     const saved = Number(localStorage.getItem('qr_interval'));
-    return Number.isFinite(saved) && saved >= 10 ? saved : 3600;
+    return Number.isFinite(saved) && saved >= 60 ? saved : 300;
   });
-  const [customInterval, setCustomInterval] = useState(String(intervalSec));
-  const [customUnit, setCustomUnit] = useState<'sec' | 'min' | 'hour' | 'day'>('min');
+  const [customInterval, setCustomInterval] = useState(() => {
+    const saved = Number(localStorage.getItem('qr_interval'));
+    return String(Math.max(1, Math.round((Number.isFinite(saved) && saved >= 60 ? saved : 300) / 60)));
+  });
+  const [customUnit, setCustomUnit] = useState<'min' | 'hour' | 'day'>('min');
 
   const [payload, setPayload] = useState('');
   const [expiresAt, setExpiresAt] = useState('');
@@ -986,8 +989,8 @@ function QrDisplay() {
   const intervalRef = useRef(intervalSec);
   intervalRef.current = intervalSec;
 
-  // The database caps tokens at ten years.
-  const MAX_INTERVAL = 315359975;
+  // Auto rotation is capped at 30 days (43,200 minutes).
+  const MAX_INTERVAL = 43200 * 60;
 
   const handleModeChange = (newMode: QrMode) => {
     setMode(newMode);
@@ -995,23 +998,16 @@ function QrDisplay() {
   };
 
   const handleIntervalChange = (val: number) => {
-    const clamped = Math.max(10, Math.min(MAX_INTERVAL, Math.round(val)));
+    const clamped = Math.max(60, Math.min(MAX_INTERVAL, Math.round(val)));
     setIntervalSec(clamped);
     localStorage.setItem('qr_interval', String(clamped));
     setCountdown(clamped);
   };
 
-  const applyPreset = (seconds: number) => {
-    setCustomInterval(String(seconds));
-    setCustomUnit('sec');
-    handleIntervalChange(seconds);
-  };
-
   const applyCustomInterval = () => {
     const num = parseFloat(customInterval);
     if (!isFinite(num) || num <= 0) return;
-    const multiplier =
-      customUnit === 'day' ? 86400 : customUnit === 'hour' ? 3600 : customUnit === 'min' ? 60 : 1;
+    const multiplier = customUnit === 'day' ? 86400 : customUnit === 'hour' ? 3600 : 60;
     handleIntervalChange(num * multiplier);
   };
 
@@ -1198,20 +1194,9 @@ function QrDisplay() {
 
         {mode === 'auto' && (
           <div style={{ textAlign: 'center' }}>
-            <p className="tiny muted">How often should the QR code change?</p>
+            <p className="tiny muted">Change the code automatically every:</p>
             <div className="interval-row">
-              {[60, 300, 900, 3600, 21600, 43200, 86400].map((s) => (
-                <button
-                  key={s}
-                  type="button"
-                  className={`interval-btn ${intervalSec === s ? 'active' : ''}`}
-                  onClick={() => applyPreset(s)}
-                >
-                  {formatDuration(s)}
-                </button>
-              ))}
               <div className="interval-custom">
-                <span>Custom:</span>
                 <input
                   type="number"
                   min="1"
@@ -1221,25 +1206,40 @@ function QrDisplay() {
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') applyCustomInterval();
                   }}
+                  style={{
+                    width: '74px',
+                    height: '44px',
+                    textAlign: 'center',
+                    border: '1px solid #dce5ee',
+                    borderRadius: '8px',
+                    padding: '0 8px',
+                    outline: 'none',
+                    background: 'white',
+                    color: '#111827',
+                    fontSize: '13px',
+                    fontWeight: 700,
+                  }}
                 />
                 <select
                   value={customUnit}
-                  onChange={(e) => setCustomUnit(e.target.value as 'sec' | 'min' | 'hour' | 'day')}
+                  onChange={(e) => setCustomUnit(e.target.value as 'min' | 'hour' | 'day')}
                   aria-label="Interval unit"
                   style={{
+                    height: '44px',
                     border: '1px solid #dce5ee',
-                    borderRadius: '7px',
-                    padding: '6px 8px',
+                    borderRadius: '8px',
+                    padding: '0 10px',
                     background: 'white',
                     color: '#111827',
-                    fontSize: '12px',
+                    fontSize: '13px',
+                    fontWeight: 600,
                   }}
                 >
-                  <option value="sec">sec</option>
-                  <option value="min">minutes</option>
-                  <option value="hour">hours</option>
-                  <option value="day">days</option>
+                  <option value="min">Minutes</option>
+                  <option value="hour">Hours</option>
+                  <option value="day">Days</option>
                 </select>
+                <span className="tiny muted">(max 43200 minutes)</span>
               </div>
             </div>
           </div>
